@@ -1,0 +1,8 @@
+celery
+redis
+pandas
+numpy
+clickhouse-driver
+psycopg2-binary
+sqlalchemy
+requests

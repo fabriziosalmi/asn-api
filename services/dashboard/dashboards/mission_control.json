@@ -1,0 +1,392 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-asn"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-asn"
+          },
+          "format": 1,
+          "query": "SELECT \n    toStartOfMinute(timestamp) as time, \n    count() as updates\nFROM bgp_events \nWHERE timestamp >= $__fromTime AND timestamp <= $__toTime\nGROUP BY time \nORDER BY time ASC",
+          "rawSql": "SELECT \n    toStartOfMinute(timestamp) as time, \n    count() as updates\nFROM bgp_events \nWHERE timestamp >= $__fromTime AND timestamp <= $__toTime\nGROUP BY time \nORDER BY time ASC",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "BGP Ingestion Rate (Global)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-asn"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        },
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-asn"
+          },
+          "format": 1,
+          "query": "SELECT event_type, count() as count FROM bgp_events WHERE timestamp >= $__fromTime AND timestamp <= $__toTime GROUP BY event_type",
+          "rawSql": "SELECT event_type, count() as count FROM bgp_events WHERE timestamp >= $__fromTime AND timestamp <= $__toTime GROUP BY event_type",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Event Distribution",
+      "type": "piechart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-asn"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 5,
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-asn"
+          },
+          "format": 1,
+          "query": "SELECT count() as threats FROM threat_events WHERE timestamp >= $__fromTime AND timestamp <= $__toTime",
+          "rawSql": "SELECT count() as threats FROM threat_events WHERE timestamp >= $__fromTime AND timestamp <= $__toTime",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Detected Threats",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-asn"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 2,
+      "options": {
+        "displayMode": "basic",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-asn"
+          },
+          "format": 1,
+          "query": "SELECT toString(asn) as asn, sum(total_events) as events FROM daily_metrics WHERE date >= today() - INTERVAL 7 DAY GROUP BY asn ORDER BY events DESC LIMIT 10",
+          "rawSql": "SELECT toString(asn) as asn, sum(total_events) as events FROM daily_metrics WHERE date >= today() - INTERVAL 7 DAY GROUP BY asn ORDER BY events DESC LIMIT 10",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Top Noisy ASNs (Historical)",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-asn"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        },
+        "pieType": "pie",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-asn"
+          },
+          "format": "table",
+          "group": [],
+          "metricColumn": "risk_level",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) as count, risk_level FROM asn_registry GROUP BY risk_level",
+          "refId": "A",
+          "select": [
+            [
+              {
+                "params": [
+                  "value"
+                ],
+                "type": "column"
+              }
+            ]
+          ],
+          "table": "asn_registry",
+          "timeColumn": "created_at",
+          "timeColumnType": "timestamp",
+          "where": []
+        }
+      ],
+      "title": "Network Risk Distribution",
+      "type": "piechart"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-asn"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 3,
+      "options": {
+        "footer": {
+          "enablePagination": true,
+          "fields": "",
+          "rowCount": false,
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-asn"
+          },
+          "format": "table",
+          "group": [],
+          "metricColumn": "None",
+          "rawQuery": true,
+          "rawSql": "SELECT asn, name, country_code, total_score, risk_level, hygiene_score, threat_score, stability_score FROM asn_registry ORDER BY total_score ASC LIMIT 50",
+          "refId": "A",
+          "select": [
+            [
+              {
+                "params": [
+                  "value"
+                ],
+                "type": "column"
+              }
+            ]
+          ],
+          "table": "asn_registry",
+          "timeColumn": "created_at",
+          "timeColumnType": "timestamp",
+          "where": []
+        }
+      ],
+      "title": "Risk Intelligence Registry (Worst Offenders)",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-asn"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "id": 101,
+      "options": {
+        "footer": {
+          "enablePagination": true,
+          "fields": "",
+          "rowCount": false,
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-asn"
+          },
+          "format": 1,
+          "query": "SELECT timestamp, toString(asn) as asn, target_ip, category, description FROM threat_events WHERE timestamp >= $__fromTime AND timestamp <= $__toTime ORDER BY timestamp DESC LIMIT 50",
+          "rawSql": "SELECT timestamp, toString(asn) as asn, target_ip, category, description FROM threat_events WHERE timestamp >= $__fromTime AND timestamp <= $__toTime ORDER BY timestamp DESC LIMIT 50",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "The Guard: Deteced Route Leaks",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-asn"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "id": 102,
+      "options": {
+        "footer": {
+          "enablePagination": true,
+          "fields": "",
+          "rowCount": false,
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-asn"
+          },
+          "format": 1,
+          "query": "SELECT toString(asn) as asn, round(avg(c),2) as avg_updates, round(stddevPop(c),2) as std_dev, round(std_dev/avg_updates, 2) as coefficient_var FROM (SELECT asn, toStartOfHour(timestamp) as t, count() as c FROM bgp_events WHERE timestamp >= now() - INTERVAL 7 DAY GROUP BY asn, t) GROUP BY asn HAVING avg_updates > 5 AND coefficient_var > 1.5 ORDER BY coefficient_var DESC LIMIT 20",
+          "rawSql": "SELECT toString(asn) as asn, round(avg(c),2) as avg_updates, round(stddevPop(c),2) as std_dev, round(std_dev/avg_updates, 2) as coefficient_var FROM (SELECT asn, toStartOfHour(timestamp) as t, count() as c FROM bgp_events WHERE timestamp >= now() - INTERVAL 7 DAY GROUP BY asn, t) GROUP BY asn HAVING avg_updates > 5 AND coefficient_var > 1.5 ORDER BY coefficient_var DESC LIMIT 20",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "The Oracle: Predictive Instability (High Variance)",
+      "type": "table"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "mission-control",
+    "asn",
+    "sota"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "ASN Mission Control",
+  "uid": "asn-mission-u1",
+  "version": 3,
+  "weekStart": ""
+}

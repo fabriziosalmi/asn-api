@@ -1,0 +1,29 @@
+apiVersion: 1
+
+datasources:
+  - name: ASN-Time-Series (ClickHouse)
+    type: grafana-clickhouse-datasource
+    uid: clickhouse-asn
+    url: http://asn_db_history:8123
+    access: proxy
+    isDefault: true
+    jsonData:
+      defaultDatabase: default
+      host: asn_db_history
+      port: 8123
+      protocol: http
+    secureJsonData:
+      username: ${CLICKHOUSE_USER}
+      password: ${CLICKHOUSE_PASSWORD}
+
+  - name: ASN-Metadata (Postgres)
+    type: postgres
+    uid: postgres-asn
+    url: asn_db_meta:5432
+    user: asn_admin
+    database: asn_registry
+    jsonData:
+      sslmode: "disable"
+      database: "asn_registry" # Redundant explicit definition for robustness
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD}

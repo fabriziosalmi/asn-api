@@ -1,0 +1,6 @@
+redis
+clickhouse-driver
+requests
+websockets
+
+celery

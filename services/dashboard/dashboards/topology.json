@@ -1,0 +1,116 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-asn"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "footer": {
+          "enablePagination": true,
+          "fields": "",
+          "rowCount": false,
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-asn"
+          },
+          "format": 1,
+          "query": "SELECT\n    concat('AS', toString(tupleElement(edge, 1)), ' -> AS', toString(tupleElement(edge, 2))) as connection,\n    toString(tupleElement(edge, 1)) as source_asn,\n    toString(tupleElement(edge, 2)) as target_asn,\n    count() as update_count\nFROM (\n     SELECT arrayJoin(arrayZip(arraySlice(path, 1, -1), arraySlice(path, 2))) as edge\n     FROM bgp_events\n     WHERE timestamp >= $__fromTime AND timestamp <= $__toTime\n     AND length(path) >= 2\n)\nGROUP BY source_asn, target_asn\nORDER BY update_count DESC\nLIMIT 100",
+          "rawSql": "SELECT\n    concat('AS', toString(tupleElement(edge, 1)), ' -> AS', toString(tupleElement(edge, 2))) as connection,\n    toString(tupleElement(edge, 1)) as source_asn,\n    toString(tupleElement(edge, 2)) as target_asn,\n    count() as update_count\nFROM (\n     SELECT arrayJoin(arrayZip(arraySlice(path, 1, -1), arraySlice(path, 2))) as edge\n     FROM bgp_events\n     WHERE timestamp >= $__fromTime AND timestamp <= $__toTime\n     AND length(path) >= 2\n)\nGROUP BY source_asn, target_asn\nORDER BY update_count DESC\nLIMIT 100",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "BGP Topology - Top 100 AS Connections",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-asn"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 2,
+      "options": {
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-asn"
+          },
+          "format": 1,
+          "query": "SELECT\n    concat('AS', toString(asn)) as asn,\n    count() as events\nFROM bgp_events\nWHERE timestamp >= $__fromTime AND timestamp <= $__toTime\nGROUP BY asn\nORDER BY events DESC\nLIMIT 20",
+          "rawSql": "SELECT\n    concat('AS', toString(asn)) as asn,\n    count() as events\nFROM bgp_events\nWHERE timestamp >= $__fromTime AND timestamp <= $__toTime\nGROUP BY asn\nORDER BY events DESC\nLIMIT 20",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Top 20 Most Active ASNs",
+      "type": "barchart"
+    }
+  ],
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["network", "topology"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Network Topology",
+  "uid": "asn-topology",
+  "version": 1,
+  "weekStart": ""
+}

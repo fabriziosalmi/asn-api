@@ -1,0 +1,199 @@
+version: '3.8'
+
+services:
+  # ------------------------------------------------------------------
+  # 1. DATA STORAGE LAYER
+  # ------------------------------------------------------------------
+  
+  # PostgreSQL: Identity, Current Score, User Management
+  db-metadata:
+    image: postgres:15-alpine
+    container_name: asn_db_meta
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./services/db-metadata/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - asn_backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ClickHouse: Time Series, BGP Updates, Logs
+  db-timeseries:
+    image: clickhouse/clickhouse-server:latest
+    container_name: asn_db_history
+    restart: always
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./services/db-timeseries/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - asn_backend
+    ports:
+      - "8123:8123" # HTTP Port for debugging
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis: Message Broker & API Cache
+  broker-cache:
+    image: redis:7-alpine
+    container_name: asn_broker
+    restart: always
+    networks:
+      - asn_backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ------------------------------------------------------------------
+  # 2. PROCESSING LAYER (WORKERS)
+  # ------------------------------------------------------------------
+
+  # Ingestor: Fetches BGP dumps and Threat Intelligence
+  asn-ingestor:
+    build: 
+      context: ./services/ingestor
+    container_name: asn_worker_ingest
+    restart: unless-stopped
+    depends_on:
+      broker-cache:
+        condition: service_healthy
+      db-timeseries:
+        condition: service_healthy
+    environment:
+      - BROKER_URL=redis://${REDIS_HOST}:6379/0
+      - CLICKHOUSE_HOST=${CLICKHOUSE_HOST}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB}
+      - PYTHONUNBUFFERED=1 # Ensure logs appear immediately
+
+      # Real data volume control
+      - RIPE_RIS_ENABLED=true 
+    networks:
+      - asn_backend
+      - asn_public
+
+  # Engine: Calculates Risk Scores (Batch & Realtime)
+  asn-engine:
+    build: 
+      context: ./services/engine
+    container_name: asn_worker_scoring
+    restart: unless-stopped
+    depends_on:
+      db-metadata:
+        condition: service_healthy
+      db-timeseries:
+        condition: service_healthy
+      broker-cache:
+        condition: service_healthy
+    environment:
+      - DB_META_HOST=db-metadata
+      - DB_TS_HOST=${CLICKHOUSE_HOST}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB}
+      - BROKER_URL=redis://${REDIS_HOST}:6379/0
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    networks:
+      - asn_backend
+      - asn_public
+
+  # ------------------------------------------------------------------
+  # 3. INTERFACE LAYER (API & DASHBOARD)
+  # ------------------------------------------------------------------
+
+  # API Gateway: FastAPI
+  asn-api:
+    build: 
+      context: ./services/api
+    container_name: asn_api_gateway
+    restart: always
+    ports:
+      - "8080:80"
+    depends_on:
+      db-metadata:
+        condition: service_healthy
+      broker-cache:
+        condition: service_healthy
+    environment:
+      - DB_HOST=db-metadata
+      - REDIS_HOST=${REDIS_HOST}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - CLICKHOUSE_HOST=${CLICKHOUSE_HOST}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB}
+    networks:
+      - asn_backend
+      - asn_public
+
+  # Visualizations
+  dashboard:
+    image: grafana/grafana:latest
+    container_name: asn_viz
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./services/dashboard/provisioning:/etc/grafana/provisioning
+      - ./services/dashboard/dashboards:/etc/grafana/provisioning/dashboards/json
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      # SOTA: Install ClickHouse plugin automatically
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
+      # Datasource Credentials
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    networks:
+      - asn_backend
+      - asn_public
+    depends_on:
+      db-timeseries:
+        condition: service_healthy
+      db-metadata:
+        condition: service_healthy
+
+# ------------------------------------------------------------------
+# NETWORKS & VOLUMES
+# ------------------------------------------------------------------
+networks:
+  asn_backend:
+    internal: true
+  asn_public:
+
+volumes:
+  postgres_data:
+  clickhouse_data:
+  grafana_data:

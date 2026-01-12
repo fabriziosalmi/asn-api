@@ -1,0 +1,9 @@
+apiVersion: 1
+
+providers:
+  - name: 'ASN Risk Dashboards'
+    folder: 'General'
+    type: file
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
+      foldersFromFilesStructure: true
