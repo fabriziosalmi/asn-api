@@ -202,6 +202,34 @@ Detailed explanation of all response fields and their meanings.
 - **Impact**: Minor transparency penalty
 - **Note**: Some legitimate organizations use privacy services
 
+### Forensics Signals (Deep Validation)
+
+#### ddos_blackhole_count
+- **Type**: Integer
+- **Description**: Count of prefixes tagged with Blackhole communities by upstreams
+- **Interpretation**: High values (>5) indicate the ASN is a DDoS target/victim
+- **Impact**: Stability penalty (-15)
+
+#### excessive_prepending_count
+- **Type**: Integer
+- **Description**: Count of AS paths with >3x prepending
+- **Interpretation**: Indicates manual traffic engineering struggles or instability
+- **Impact**: Stability penalty (-10)
+
+### Enterprise Headers
+
+#### X-RateLimit-Limit
+- **Type**: Integer
+- **Description**: Maximum requests allowed per window (default 100)
+
+#### X-RateLimit-Remaining
+- **Type**: Integer
+- **Description**: Requests remaining in current window
+
+#### X-RateLimit-Reset
+- **Type**: Integer (Unix Timestamp)
+- **Description**: Time when the rate limit window resets
+
 ## Details Array
 
 The `details` field is no longer a list of strings but a list of **Actionable Objects**.

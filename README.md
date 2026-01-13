@@ -54,39 +54,14 @@ curl -X POST -H "X-API-Key: dev-secret" -H "Content-Type: application/json" \
 | **Hygiene** (40%) | RPKI validation, route leaks, bogon advertisements, **Zombie ASNs** (0 prefixes) |
 | **Threats** (35%) | Spamhaus listings, botnet C2, phishing, malware, **WHOIS Entropy** (SOTA) |
 | **Stability** (25%) | BGP churn rate, announcement volatility, **Downstream Risk** (Cone of Silence) |
+| **Forensics** (Bonus)| **DDoS Sponge** (Blackholing), **Traffic Chaos** (Prepending), **Space Squatting** |
+| **Enterprise** (Obs) | RFC-Compliant Rate Limiting (`X-RateLimit`), Forensic Dashboards |
 
 **Score Range**: 0-100 (higher is better)
 - 90-100: LOW risk
 - 75-89: MEDIUM risk
 - 50-74: HIGH risk
 - 0-49: CRITICAL risk
-
-## Features Implemented
-
-### Phase 1: Production Readiness ✅
-- [x] Real threat feeds (Spamhaus DROP/EDROP, URLhaus, PhishTank)
-- [x] API authentication with API keys
-- [x] Historical score timeline
-- [x] PeeringDB enrichment
-- [x] Whitelist management
-- [x] System health monitoring
-- [x] Bulk analysis endpoint
-
-### Phase 2: Intelligence Features ✅
-- [x] BGP topology visualization
-- [x] Route leak detection (valley-free violations)
-- [x] Predictive BGP stability analysis
-
-### Phase 3: Production Readiness ✅
-- [x] Automated Test Suite (`pytest`)
-- [x] GitLab CI/CD Pipeline
-- [x] Rate Limiting Strategy (`RATELIMIT.md`)
-
-### Phase 4: Advanced Intelligence (SOTA) ✅
-- [x] **Downstream Risk Analysis** ("Cone of Silence")
-- [x] **Zombie ASN Detection** (Parked Networks)
-- [x] **WHOIS Entropy Scoring** (Anti-shell company)
-- [x] **Peer Pressure Dashboard**
 
 ## Dashboards
 
