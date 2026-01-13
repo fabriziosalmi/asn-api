@@ -44,4 +44,11 @@ CREATE TABLE IF NOT EXISTS asn_signals (
     PRIMARY KEY (asn)
 );
 
+
+CREATE TABLE IF NOT EXISTS asn_whitelist (
+    asn BIGINT PRIMARY KEY REFERENCES asn_registry(asn),
+    reason TEXT,
+    added_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 CREATE INDEX idx_asn_score ON asn_registry(total_score);

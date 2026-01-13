@@ -103,13 +103,17 @@ class DataIngestor:
     def _flush_bgp_batch(self, batch, source_label):
         if not batch: return
         try:
-            self.ch_client.execute(
-                'INSERT INTO bgp_events (timestamp, asn, prefix, event_type, upstream_as, path, community) VALUES',
-                batch
+            # Offload sync ClickHouse write to a thread to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
+            loop.run_in_executor(
+                None, 
+                lambda: self.ch_client.execute(
+                    'INSERT INTO bgp_events (timestamp, asn, prefix, event_type, upstream_as, path, community) VALUES',
+                    batch
+                )
             )
-            # print(f"[BGP-{source_label}] Ingested {len(batch)} events.")
         except Exception as e:
-            print(f"[BGP-{source_label}] DB Error: {e}")
+            print(f"[BGP-{source_label}] DB Error: {source_label}: {e}")
 
     async def simulate_bgp_stream(self):
         """
@@ -142,11 +146,14 @@ class DataIngestor:
 
             if batch:
                 try:
-                    self.ch_client.execute(
-                        'INSERT INTO bgp_events (timestamp, asn, prefix, event_type, upstream_as, path, community) VALUES',
-                        batch
+                    loop = asyncio.get_event_loop()
+                    loop.run_in_executor(
+                        None,
+                        lambda: self.ch_client.execute(
+                            'INSERT INTO bgp_events (timestamp, asn, prefix, event_type, upstream_as, path, community) VALUES',
+                            batch
+                        )
                     )
-                    # print(f"[BGP] Ingested {len(batch)} events.")
                 except Exception as e:
                     print(f"[BGP] Error writing to ClickHouse: {e}")
 
@@ -172,9 +179,13 @@ class DataIngestor:
             }]
             
             try:
-                self.ch_client.execute(
-                    'INSERT INTO threat_events (timestamp, asn, source, category, target_ip, description) VALUES',
-                    threat_event
+                loop = asyncio.get_event_loop()
+                loop.run_in_executor(
+                    None,
+                    lambda: self.ch_client.execute(
+                        'INSERT INTO threat_events (timestamp, asn, source, category, target_ip, description) VALUES',
+                        threat_event
+                    )
                 )
                 print(f"[Threat] Logged new threat event for ASN {bad_asn}")
                 
@@ -311,9 +322,13 @@ class DataIngestor:
                                 'description': f'{source_match} detection on {route_prefix}'
                             }]
                             
-                            self.ch_client.execute(
-                                'INSERT INTO threat_events (timestamp, asn, source, category, target_ip, description) VALUES',
-                                threat_event
+                            loop = asyncio.get_event_loop()
+                            loop.run_in_executor(
+                                None,
+                                lambda: self.ch_client.execute(
+                                    'INSERT INTO threat_events (timestamp, asn, source, category, target_ip, description) VALUES',
+                                    threat_event
+                                )
                             )
                             # Instant Rescore
                             self.celery_app.send_task('tasks.calculate_asn_score', args=[route_asn])
@@ -411,9 +426,13 @@ class DataIngestor:
                                     'description': description
                                 }]
                                 
-                                self.ch_client.execute(
-                                    'INSERT INTO threat_events (timestamp, asn, source, category, target_ip, description) VALUES',
-                                    threat_event
+                                loop = asyncio.get_event_loop()
+                                loop.run_in_executor(
+                                    None,
+                                    lambda: self.ch_client.execute(
+                                        'INSERT INTO threat_events (timestamp, asn, source, category, target_ip, description) VALUES',
+                                        threat_event
+                                    )
                                 )
                                 self.celery_app.send_task('tasks.calculate_asn_score', args=[asn])
                                 leaks_found += 1

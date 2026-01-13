@@ -111,99 +111,81 @@ class RiskScorer:
         """
         Calculates complex temporal behavior (Derivatives).
         """
+        params = {'asn': asn}
         
         # 1. BGP Churn (How many distinct upstreams in last 90 days?)
-        # A high number of upstream providers in a short time is a strong indicator of "AS Hopping"
-        query_churn = f"""
+        query_churn = """
         SELECT uniq(upstream_as) 
         FROM bgp_events 
-        WHERE asn = {asn} AND event_type = 'announce' AND timestamp > now() - INTERVAL 90 DAY
+        WHERE asn = %(asn)s AND event_type = 'announce' AND timestamp > now() - INTERVAL 90 DAY
         """
-        upstream_churn_90d = self.ch_client.execute(query_churn)[0][0]
+        upstream_churn_90d = self.ch_client.execute(query_churn, params)[0][0]
 
         # 2. Prefix Flapping (Instability) via Materialized View or Raw
-        # We check the daily_metrics MV we created
-        query_flaps = f"""
+        query_flaps = """
         SELECT sum(withdraw_count) 
         FROM daily_metrics 
-        WHERE asn = {asn} AND date > now() - INTERVAL 7 DAY
+        WHERE asn = %(asn)s AND date > now() - INTERVAL 7 DAY
         """
-        result_flaps = self.ch_client.execute(query_flaps)
+        result_flaps = self.ch_client.execute(query_flaps, params)
         recent_withdrawals = result_flaps[0][0] if result_flaps and result_flaps[0][0] else 0
 
         # 3. IP Space Velocity (Growth Rate)
-        # Compare unique prefixes announced today vs 30 days ago
-        # Note: This is an expensive query on raw events, optimized here for demo
-        query_velocity = f"""
-        SELECT uniq(prefix) FROM bgp_events WHERE asn = {asn} AND timestamp > now() - INTERVAL 2 DAY
+        query_velocity = """
+        SELECT uniq(prefix) FROM bgp_events WHERE asn = %(asn)s AND timestamp > now() - INTERVAL 2 DAY
         """
-        result_velocity = self.ch_client.execute(query_velocity)
+        result_velocity = self.ch_client.execute(query_velocity, params)
         current_prefix_count = result_velocity[0][0] if result_velocity else 0
         
         # 4. Threat Persistence (Recidivism)
-        query_threats = f"""
-        SELECT count(*) FROM threat_events WHERE asn = {asn} AND timestamp > now() - INTERVAL 30 DAY
+        query_threats = """
+        SELECT count(*) FROM threat_events WHERE asn = %(asn)s AND timestamp > now() - INTERVAL 30 DAY
         """
-        result_threats = self.ch_client.execute(query_threats)
+        result_threats = self.ch_client.execute(query_threats, params)
         recent_threat_count = result_threats[0][0] if result_threats else 0
         
         # 5. Connectivity Risk (Guilt by Association)
-        # Find who are the top upstreams for this ASN
-        query_upstreams = f"""
+        query_upstreams = """
         SELECT upstream_as, count(*) as c 
         FROM bgp_events 
-        WHERE asn = {asn} AND upstream_as != 0 AND timestamp > now() - INTERVAL 30 DAY
+        WHERE asn = %(asn)s AND upstream_as != 0 AND timestamp > now() - INTERVAL 30 DAY
         GROUP BY upstream_as ORDER BY c DESC LIMIT 3
         """
-        upstreams = self.ch_client.execute(query_upstreams)
+        upstreams = self.ch_client.execute(query_upstreams, params)
         
-        neighbor_score_sum = 0
-        neighbor_count = 0
-        
+        avg_upstream_score = 100
         if upstreams:
             upstream_asns = [u[0] for u in upstreams]
-            # Query Postgres for their scores
-            # Note: In production you would do a proper IN clause w/ SQLAlchemy
-            for u_asn in upstream_asns:
-                with self.pg_engine.connect() as conn:
-                    res = conn.execute(
-                        text("SELECT total_score FROM asn_registry WHERE asn = :asn"), 
-                        {'asn': u_asn}
-                    ).fetchone()
-                    if res:
-                        neighbor_score_sum += res[0]
-                        neighbor_count += 1
-        
-        avg_upstream_score = (neighbor_score_sum / neighbor_count) if neighbor_count > 0 else 100
+            # Batch query for scores to avoid N+1 problem
+            with self.pg_engine.connect() as conn:
+                res = conn.execute(
+                    text("SELECT total_score FROM asn_registry WHERE asn = ANY(:asns)"), 
+                    {'asns': upstream_asns}
+                ).fetchall()
+                if res:
+                    avg_upstream_score = sum(r[0] for r in res) / len(res)
 
         # 6. [The Oracle] Predictive Stability Analysis
-        # Calculate daily variance to predict future instability
-        query_oracle = f"""
+        query_oracle = """
         SELECT avg(c) as u, stddevPop(c) as s
         FROM (
             SELECT toDate(timestamp) as d, count(*) as c 
             FROM bgp_events 
-            WHERE asn = {asn} AND timestamp > now() - INTERVAL 14 DAY
+            WHERE asn = %(asn)s AND timestamp > now() - INTERVAL 14 DAY
             GROUP BY d
         )
         """
-        oracle_stats = self.ch_client.execute(query_oracle)
+        oracle_stats = self.ch_client.execute(query_oracle, params)
         is_predictive_unstable = False
         
         if oracle_stats and oracle_stats[0][0]:
             mean_daily = oracle_stats[0][0]
             std_dev = oracle_stats[0][1]
             
-            # Check *today's* partial activity (extrapolated or raw)
-            # For simplicity, we check if the last 4 hours activity is unusually high compared to daily mean/6
-            query_today = f"SELECT count(*) FROM bgp_events WHERE asn = {asn} AND timestamp > now() - INTERVAL 4 HOUR"
-            res_today = self.ch_client.execute(query_today)
+            query_today = "SELECT count(*) FROM bgp_events WHERE asn = %(asn)s AND timestamp > now() - INTERVAL 4 HOUR"
+            res_today = self.ch_client.execute(query_today, params)
             current_burst = res_today[0][0] if res_today else 0
             
-            # Anomaly Threshold: If 4h burst is > (DailyMean + 2*Sigma) / 6, it involves a massive spike
-            # Or simpler: If std_dev is huge compared to mean (Coefficient of Variation > 1.5), the ASN is erratic.
-            
-            # Let's use Coefficient of Variation (CV) for stability prediction
             if mean_daily > 10 and (std_dev / mean_daily) > 1.5:
                  is_predictive_unstable = True
 

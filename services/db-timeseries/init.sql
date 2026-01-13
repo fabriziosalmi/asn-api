@@ -60,3 +60,26 @@ SELECT
 FROM threat_events
 GROUP BY date, asn;
 
+-- Historical ASN scores
+CREATE TABLE IF NOT EXISTS asn_score_history (
+    timestamp DateTime,
+    asn UInt32,
+    score UInt8
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (asn, timestamp);
+
+-- API Request Logging
+CREATE TABLE IF NOT EXISTS api_requests (
+    timestamp DateTime,
+    endpoint String,
+    method String,
+    status_code UInt16,
+    response_time_ms Float64,
+    cache_hit UInt8,
+    client_ip String,
+    error_message String
+) ENGINE = MergeTree()
+PARTITION BY toDate(timestamp)
+ORDER BY (timestamp, endpoint);
+
