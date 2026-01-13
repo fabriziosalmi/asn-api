@@ -2,6 +2,7 @@ import os
 import json
 import time
 import logging
+import inspect
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Security, Depends, Request, Response
 from fastapi.security import APIKeyHeader
@@ -149,6 +150,12 @@ async def add_response_time(request: Request, call_next):
     process_time = (time.time() - start_time) * 1000  # Convert to ms
     response.headers["X-Response-Time"] = f"{process_time:.2f}ms"
     
+    # Extract details for logging
+    endpoint = request.url.path
+    method = request.method
+    client_ip = request.client.host if request.client else "0.0.0.0"
+    status_code = response.status_code
+    
     # Extract cache hit info from context if available
     if hasattr(request.state, 'cache_hit'):
         cache_hit = request.state.cache_hit
@@ -168,7 +175,7 @@ async def add_response_time(request: Request, call_next):
         
         # Fire and forget using a thread (since ch_client is sync)
         loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, lambda: asyncio.run(log_to_clickhouse()) if asyncio.iscoroutinefunction(log_to_clickhouse) else log_to_clickhouse())
+        loop.run_in_executor(None, lambda: asyncio.run(log_to_clickhouse()) if inspect.iscoroutinefunction(log_to_clickhouse) else log_to_clickhouse())
 
     return response
 

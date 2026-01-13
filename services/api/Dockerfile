@@ -3,7 +3,7 @@ FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 # Install system dependencies
-# SOTA: Using bookworm (stable) avoids hash sum mismatches common in 'testing' (trixie)
+# Using bookworm (stable) avoids hash sum mismatches common in 'testing' (trixie)
 # Fix hash sum mismatch issues by disabling pipelining and clean metadata
 RUN echo "Acquire::http::Pipeline-Depth 0;" > /etc/apt/apt.conf.d/99custom && \
     echo "Acquire::http::No-Cache true;" >> /etc/apt/apt.conf.d/99custom && \

@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS daily_metrics (
 PARTITION BY toYYYYMM(date)
 ORDER BY (date, asn);
 
--- SOTA: Materialized View to auto-aggregate BGP events in real-time
+-- Materialized View to auto-aggregate BGP events in real-time
 -- This avoids heavy scans on the raw 'bgp_events' table later.
 CREATE MATERIALIZED VIEW IF NOT EXISTS bgp_daily_mv TO daily_metrics AS
 SELECT 
@@ -48,7 +48,7 @@ SELECT
 FROM bgp_events
 GROUP BY date, asn;
 
--- SOTA: Materialized View for Threat events
+-- Materialized View for Threat events
 CREATE MATERIALIZED VIEW IF NOT EXISTS threat_daily_mv TO daily_metrics AS
 SELECT 
     toDate(timestamp) as date,

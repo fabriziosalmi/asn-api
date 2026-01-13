@@ -12,10 +12,11 @@ interface RiskScoreResponse {
   registry: string | null           // RIR: ARIN, RIPE, APNIC, LACNIC, AFRINIC
   risk_score: number                // 0-100
   risk_level: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+  rank_percentile: number           // 0.00-100.00
   last_updated: string              // ISO 8601 timestamp
   breakdown: ScoreBreakdown
   signals: AllSignals
-  details: string[]                 // Human-readable explanations
+  details: PenaltyDetail[]          // Structured actionable feedback
 }
 ```
 
@@ -102,6 +103,27 @@ interface BulkResult {
 }
 ```
 
+## Peer Pressure
+
+Response object for upstream risk analysis.
+
+```typescript
+interface PeerPressureResponse {
+  asn: number
+  risk_score: number
+  avg_upstream_score: number
+  upstreams: UpstreamPeer[]
+}
+
+interface UpstreamPeer {
+  asn: number
+  name: string | null
+  score: number
+  risk_level: string
+  connection_count: number
+}
+```
+
 ## Error Response
 
 Standard error format following RFC 7807.
@@ -114,33 +136,27 @@ interface ErrorResponse {
 
 ## Details Field Format
 
-The `details` array contains human-readable explanations for detected risk signals. Each entry uses emoji icons for visual categorization:
+The `details` array contains structured objects for programmatic handling.
 
-### Icon Legend
+```typescript
+interface PenaltyDetail {
+  code: string        // Stable error code (e.g. RPKI_INVALID)
+  severity: string    // LOW, MEDIUM, HIGH, CRITICAL
+  description: string // Human-readable text
+  action: string      // Remediation 
+}
+```
 
-| Icon | Category | Example |
-|------|----------|---------|
-| ⚠️ | Warning | RPKI validation issues |
-| 🚨 | Critical | Route leaks, valley-free violations |
-| 🔴 | Severe | Bogon advertisements |
-| 🛑 | Blocklist | Spamhaus listings |
-| 🤖 | Botnet | C2 infrastructure |
-| 🎣 | Phishing | Phishing domains |
-| 🦠 | Malware | Malware distribution |
-| 📧 | Spam | Spam emission |
-| 📡 | Metadata | Transparency issues |
-| 🔗 | Connectivity | Network resilience |
-| 🕵️ | Privacy | Hidden WHOIS |
-
-### Example Details
+### Example
 
 ```json
 "details": [
-  "⚠️ RPKI: 2.5% of routes have INVALID RPKI status",
-  "🚨 ROUTING: Valley-free violation detected (possible route leak)",
-  "🛑 THREAT: Listed on Spamhaus DROP/EDROP",
-  "🤖 THREAT: 3 known Botnet C2 servers hosted",
-  "📡 METADATA: No PeeringDB profile (reduces transparency)"
+  {
+      "code": "RPKI_INVALID",
+      "severity": "HIGH",
+      "description": "2.5% of routes have INVALID RPKI status",
+      "action": "Review ROA configuration for advertised prefixes."
+  }
 ]
 ```
 

@@ -1,0 +1,47 @@
+stages:
+  - lint
+  - test
+  - build
+
+variables:
+  DOCKER_DRIVER: overlay2  
+  POSTGRES_DB: asn_db
+  POSTGRES_USER: runner
+  POSTGRES_PASSWORD: runner_password
+
+services:
+  - postgres:15-alpine
+  - redis:7-alpine
+
+linting:
+  stage: lint
+  image: python:3.9-slim
+  script:
+    - pip install ruff black
+    - ruff check .
+    - black --check .
+
+unit_tests:
+  stage: test
+  image: python:3.9
+  variables:
+    # Service Access
+    DB_HOST: postgres
+    REDIS_HOST: redis
+  before_script:
+    - pip install -r services/api/requirements.txt
+    - pip install pytest pytest-asyncio httpx
+  script:
+    - pytest tests/ -v
+
+build_api:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - docker build -t $CI_REGISTRY_IMAGE/api:$CI_COMMIT_SHA ./services/api
+    - docker push $CI_REGISTRY_IMAGE/api:$CI_COMMIT_SHA
+  only:
+    - main
+    - tags

@@ -56,6 +56,12 @@ Detailed explanation of all response fields and their meanings.
 - **Example**: `"2026-01-11 23:03:28.308666+00:00"`
 - **Note**: Scores are recalculated on events or periodic refresh (typically every 5-15 minutes)
 
+### rank_percentile
+- **Type**: Float (0.00-100.00)
+- **Description**: Global safety ranking compared to all other ASNs
+- **Example**: `95.4` means this ASN is less risky than 95.4% of the global internet
+- **Interpretation**: Higher is better. 99+ is Elite, <50 is Hazardous.
+
 ## Score Breakdown
 
 ### breakdown.hygiene
@@ -192,23 +198,30 @@ Detailed explanation of all response fields and their meanings.
 
 ## Details Array
 
-The `details` field provides human-readable explanations for all detected issues. Each entry follows the format:
+The `details` field is no longer a list of strings but a list of **Actionable Objects**.
 
-```
-[Icon] [Category]: [Description]
-```
-
-Only signals that triggered penalties are included. An empty array means no issues detected.
+### Structure
+- `code` (string): Stable error code for programmatic handling (e.g., `RPKI_INVALID`)
+- `severity` (enum): `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`
+- `description` (string): Human-readable explanation
+- `action` (string): Recommended remediation step
 
 ### Example Entries
 
 ```json
 [
-  "RPKI: 2.5% of routes have INVALID RPKI status",
-  "ROUTING: Valley-free violation detected (possible route leak)",
-  "THREAT: Listed on Spamhaus DROP/EDROP",
-  "THREAT: 3 known Botnet C2 servers hosted",
-  "METADATA: No PeeringDB profile (reduces transparency)"
+  {
+    "code": "RPKI_INVALID",
+    "severity": "HIGH",
+    "description": "2.5% of routes have INVALID RPKI status",
+    "action": "Review ROA configuration for advertised prefixes."
+  },
+  {
+      "code": "THREAT_SPAMHAUS",
+      "severity": "CRITICAL",
+      "description": "Listed on Spamhaus DROP/EDROP",
+      "action": "Immediate removal required. Contact Spamhaus."
+  }
 ]
 ```
 

@@ -26,6 +26,7 @@ curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169
   "registry": null,
   "risk_score": 55,
   "risk_level": "HIGH",
+  "rank_percentile": 95.4,
   "last_updated": "2026-01-11 23:03:28.308666+00:00",
   "breakdown": {
     "hygiene": 100,
@@ -55,7 +56,12 @@ curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169
     }
   },
   "details": [
-    "METADATA: No PeeringDB profile (reduces transparency)"
+      {
+          "code": "META_NO_PDB",
+          "severity": "LOW",
+          "description": "No PeeringDB profile",
+          "action": "Create a PeeringDB profile to improve visibility/trust."
+      }
   ]
 }
 ```
@@ -66,6 +72,50 @@ curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169
 |------|-------------|
 | 403 | Invalid or missing API key |
 | 404 | ASN not found or not yet scored |
+
+---
+
+## GET /asn/{asn}/upstreams
+
+**Peer Pressure Analysis**: Evaluates the risk of the ASN's upstream providers (who they buy transit from).
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| asn | integer | Yes | The AS number to query |
+
+### Request
+
+```bash
+curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/3333/upstreams
+```
+
+### Response
+
+```json
+{
+    "asn": 3333,
+    "risk_score": 95,
+    "avg_upstream_score": 88,
+    "upstreams": [
+        {
+            "asn": 1299,
+            "name": "TELIA",
+            "score": 90,
+            "risk_level": "LOW",
+            "connection_count": 450
+        },
+        {
+            "asn": 2914,
+            "name": "NTT",
+            "score": 85,
+            "risk_level": "LOW",
+            "connection_count": 300
+        }
+    ]
+}
+```
 
 ---
 

@@ -366,6 +366,42 @@
       ],
       "title": "The Oracle: Predictive Instability (High Variance)",
       "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-asn"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "id": 103,
+      "options": {
+        "footer": {
+          "enablePagination": true,
+          "fields": "",
+          "rowCount": false,
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-asn"
+          },
+          "format": 1,
+          "query": "SELECT toString(upstream_as) as upstream, count() as connections, uniq(asn) as downstream_clients FROM bgp_events WHERE timestamp >= $__fromTime AND timestamp <= $__toTime AND upstream_as != 0 GROUP BY upstream ORDER BY connections DESC LIMIT 10",
+          "rawSql": "SELECT toString(upstream_as) as upstream, count() as connections, uniq(asn) as downstream_clients FROM bgp_events WHERE timestamp >= $__fromTime AND timestamp <= $__toTime AND upstream_as != 0 GROUP BY upstream ORDER BY connections DESC LIMIT 10",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Peer Pressure: Top Upstream Dependencies (Risk Nodes)",
+      "type": "table"
     }
   ],
   "refresh": "5s",
@@ -373,8 +409,7 @@
   "style": "dark",
   "tags": [
     "mission-control",
-    "asn",
-    "sota"
+    "asn"
   ],
   "templating": {
     "list": []
