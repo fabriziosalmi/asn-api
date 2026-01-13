@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS asn_registry (
     threat_score INTEGER DEFAULT 100,
     stability_score INTEGER DEFAULT 100,
     
+    -- Phase 4: SOTA Intelligence
+    downstream_score INTEGER DEFAULT 100,
+    whois_entropy_score DECIMAL(5,2) DEFAULT 0.0,
+    
     risk_level VARCHAR(20) DEFAULT 'UNKNOWN', -- LOW, MEDIUM, HIGH, CRITICAL
     
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -39,6 +43,10 @@ CREATE TABLE IF NOT EXISTS asn_signals (
     has_peeringdb_profile BOOLEAN DEFAULT FALSE,
     upstream_tier1_count INTEGER DEFAULT 0,
     is_whois_private BOOLEAN DEFAULT FALSE,
+    
+    -- Phase 4 Signals
+    is_zombie_asn BOOLEAN DEFAULT FALSE,
+    whois_entropy DECIMAL(5,2) DEFAULT 0.0,
     
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     PRIMARY KEY (asn)

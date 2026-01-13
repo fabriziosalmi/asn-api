@@ -42,7 +42,7 @@ class RiskScorer:
         final_score, breakdown, details, risk_level = self._apply_scoring_rules(signals, temporal_metrics)
         
         # 4. Persist Result
-        self._save_score(asn, final_score, breakdown, risk_level)
+        self._save_score(asn, final_score, breakdown, risk_level, temporal_metrics)
         
         return final_score
 
@@ -195,8 +195,55 @@ class RiskScorer:
             'current_prefix_count': current_prefix_count,
             'recent_threat_count': recent_threat_count,
             'avg_upstream_score': avg_upstream_score,
-            'is_predictive_unstable': is_predictive_unstable
+            'is_predictive_unstable': is_predictive_unstable,
+             # Phase 4 Signals
+            'downstream_score': self._analyze_downstreams(asn),
+            'zombie_status': current_prefix_count == 0
         }
+
+    def _analyze_downstreams(self, asn):
+        """
+        [Phase 4] Cone of Silence: Analyze risk of downstream clients.
+        If you sell to bad actors, you are complicit.
+        """
+        # Get ASNs that treat THIS asn as an upstream
+        query = """
+        SELECT asn, count(*) as c 
+        FROM bgp_events 
+        WHERE upstream_as = %(asn)s AND timestamp > now() - INTERVAL 30 DAY
+        GROUP BY asn ORDER BY c DESC LIMIT 20
+        """
+        downstreams = self.ch_client.execute(query, {'asn': asn})
+        
+        if not downstreams:
+            return 100 # No downstreams = No risk
+            
+        downstream_asns = [d[0] for d in downstreams]
+        
+        # Check their scores in Postgres
+        with self.pg_engine.connect() as conn:
+            res = conn.execute(
+                text("SELECT total_score FROM asn_registry WHERE asn = ANY(:asns)"), 
+                {'asns': downstream_asns}
+            ).fetchall()
+            
+            if not res:
+                return 100
+                
+            avg_score = sum(r[0] for r in res) / len(res)
+            return avg_score
+
+    def _calculate_whois_entropy(self, text):
+        """
+        [Phase 4] Detect random strings in WHOIS (e.g. "Xj92sA Llc")
+        """
+        import math
+        if not text:
+            return 0.0
+            
+        prob = [float(text.count(c)) / len(text) for c in dict.fromkeys(list(text))]
+        entropy = -sum([p * math.log(p) / math.log(2.0) for p in prob])
+        return entropy
 
     def _apply_scoring_rules(self, s, t):
         """
@@ -301,8 +348,32 @@ class RiskScorer:
         elif avg_upstream < 70:
              penalty = 5
              score -= penalty
+             score -= penalty
              details.append("Suspicious Upstreams")
 
+        # --- PHASE 4: SOTA INTELLIGENCE ---
+        
+        # 1. "Cone of Silence" (Downstream Risk)
+        # If your customers are bad, you are bad.
+        downstream_score = t.get('downstream_score', 100)
+        if downstream_score < 70:
+            penalty = 20
+            score -= penalty; breakdown['stability'] -= penalty
+            details.append(f"Toxic Downstream Clientele (Avg Score: {int(downstream_score)})")
+            
+        # 2. "The Ghost" (Zombie ASN)
+        if t.get('zombie_status'):
+             penalty = 15
+             score -= penalty; breakdown['hygiene'] -= penalty
+             details.append("Zombie ASN: Active Registration but Zero Routes")
+             
+        # 3. WHOIS Entropy (Randomized Names)
+        entropy = s.get('whois_entropy', 0.0)
+        if entropy > 4.5: # Threshold for random string
+             penalty = 10
+             score -= penalty; breakdown['threat'] -= penalty
+             details.append(f"High WHOIS Entropy ({entropy:.2f}): Possible generated name")
+        
         # Cap score 0-100
         final_score = max(0, min(100, score))
         
@@ -318,9 +389,18 @@ class RiskScorer:
             
         return final_score, breakdown, details, risk_level
 
-    def _save_score(self, asn, score, breakdown, risk_level):
+    def _save_score(self, asn, score, breakdown, risk_level, metrics=None):
         # 1. Update Persistent Registry (Postgres)
+        timestamp = datetime.now()
+        downstream_score = 100
+        is_zombie = False
+        
+        if metrics:
+            downstream_score = metrics.get('downstream_score', 100)
+            is_zombie = metrics.get('zombie_status', False)
+
         with self.pg_engine.connect() as conn:
+            # Update Registry
             conn.execute(text("""
                 UPDATE asn_registry 
                 SET total_score = :score, 
@@ -328,7 +408,8 @@ class RiskScorer:
                     threat_score = 100 + :t,
                     stability_score = 100 + :s,
                     risk_level = :risk_level,
-                    last_scored_at = NOW()
+                    downstream_score = :ds,
+                    last_scored_at = :now
                 WHERE asn = :asn
             """), {
                 'score': score, 
@@ -336,8 +417,18 @@ class RiskScorer:
                 't': breakdown['threat'],
                 's': breakdown['stability'],
                 'risk_level': risk_level,
+                'ds': downstream_score,
+                'now': timestamp,
                 'asn': asn
             })
+            
+            # Update Signals (Zombie Status)
+            conn.execute(text("""
+                UPDATE asn_signals
+                SET is_zombie_asn = :zombie
+                WHERE asn = :asn
+            """), {'zombie': is_zombie, 'asn': asn})
+            
             conn.commit()
             
         # 2. Append to Time Series History (ClickHouse)
@@ -401,8 +492,17 @@ class RiskScorer:
                         SET name = :name, country_code = :cc 
                         WHERE asn = :asn
                     """), {'name': holder, 'cc': country_code, 'asn': asn})
+                    
+                     # Phase 4: Calculate WHOIS Entropy
+                    entropy = self._calculate_whois_entropy(holder)
+                    conn.execute(text("""
+                        UPDATE asn_signals 
+                        SET whois_entropy = :e
+                        WHERE asn = :asn
+                    """), {'e': entropy, 'asn': asn})
+                    
                     conn.commit()
-                    print(f"[Enrichment] Updated ASN {asn}: {holder} ({country_code})")
+                    print(f"[Enrichment] Updated ASN {asn}: {holder} ({country_code}) Entropy: {entropy:.2f}")
 
             # 2. PeeringDB - Physical Infrastructure Context
             # Check if this ASN is "real" (present in data centers)

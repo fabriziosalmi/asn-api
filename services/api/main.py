@@ -108,6 +108,7 @@ class RiskScoreResponse(BaseModel):
     risk_score: int
     risk_level: str
     rank_percentile: Optional[float] = None # Global percentile (0-100)
+    downstream_score: Optional[int] = None # Phase 4 SOTA
     last_updated: str
     breakdown: Dict[str, int]
     signals: AllSignals
@@ -291,10 +292,10 @@ def get_asn_score(asn: int, response: Response, request: Request, api_key: str =
         logger.error(f"Cache error: {e}")
         request.state.cache_hit = False
     
-    query = text("""
-        SELECT r.asn, r.name, r.country_code, r.registry,
-               r.total_score, r.risk_level, r.last_scored_at,
-               r.hygiene_score, r.threat_score, r.stability_score,
+        query = text("""
+            SELECT r.asn, r.name, r.country_code, r.registry,
+                   r.total_score, r.risk_level, r.last_scored_at, r.downstream_score,
+                   r.hygiene_score, r.threat_score, r.stability_score,
                s.rpki_invalid_percent, s.rpki_unknown_percent,
                s.has_route_leaks, s.has_bogon_ads, s.is_stub_but_transit,
                s.prefix_granularity_score,
@@ -342,6 +343,7 @@ def get_asn_score(asn: int, response: Response, request: Request, api_key: str =
             "risk_score": score,
             "risk_level": level,
             "rank_percentile": round(percentile, 1),
+            "downstream_score": result.get('downstream_score'),
             "last_updated": str(result['last_scored_at']),
             "breakdown": {
                 "hygiene": result['hygiene_score'],
