@@ -402,6 +402,88 @@
       ],
       "title": "Peer Pressure: Top Upstream Dependencies (Risk Nodes)",
       "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-asn"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 41
+      },
+      "id": 104,
+      "options": {
+        "footer": {
+          "enablePagination": true,
+          "fields": "",
+          "rowCount": false,
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-asn"
+          },
+          "format": "table",
+          "group": [],
+          "metricColumn": "None",
+          "rawQuery": true,
+          "rawSql": "SELECT asn, ddos_blackhole_count as detected_blackholes FROM asn_signals WHERE ddos_blackhole_count > 0 ORDER BY ddos_blackhole_count DESC LIMIT 10",
+          "refId": "A",
+          "table": "asn_signals",
+          "timeColumn": "updated_at",
+          "timeColumnType": "timestamp",
+          "where": []
+        }
+      ],
+      "title": "Forensics: DDoS Sponge Targets (Blackhole Detected)",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-asn"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 41
+      },
+      "id": 105,
+      "options": {
+        "footer": {
+          "enablePagination": true,
+          "fields": "",
+          "rowCount": false,
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-asn"
+          },
+          "format": "table",
+          "group": [],
+          "metricColumn": "None",
+          "rawQuery": true,
+          "rawSql": "SELECT asn, excessive_prepending_count as prepends FROM asn_signals WHERE excessive_prepending_count > 0 ORDER BY excessive_prepending_count DESC LIMIT 10",
+          "refId": "A",
+          "table": "asn_signals",
+          "timeColumn": "updated_at",
+          "timeColumnType": "timestamp",
+          "where": []
+        }
+      ],
+      "title": "Forensics: Traffic Engineering Violators",
+      "type": "table"
     }
   ],
   "refresh": "5s",

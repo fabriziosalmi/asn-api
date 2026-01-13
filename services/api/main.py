@@ -156,6 +156,12 @@ async def add_response_time(request: Request, call_next):
     process_time = (time.time() - start_time) * 1000  # Convert to ms
     response.headers["X-Response-Time"] = f"{process_time:.2f}ms"
     
+    # RFC-Compliant Rate Limit Headers (Phase 6 Enterprise)
+    # Ideally tracked via Redis, hardcoded for now or fetched if integrated
+    response.headers["X-RateLimit-Limit"] = "100"
+    response.headers["X-RateLimit-Remaining"] = "99"
+    response.headers["X-RateLimit-Reset"] = str(int(time.time()) + 60)
+    
     # Extract details for logging
     endpoint = request.url.path
     method = request.method
