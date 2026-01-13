@@ -30,6 +30,8 @@ Evaluates routing best practices and protocol compliance.
 | Route Leaks | -25 | Valley-free routing violations |
 | Bogon Ads | -40 | Advertising reserved/unallocated space |
 | Stub Transit | -20 | Stub ASN acting as transit provider |
+| Zombie ASN | -15 | Registered but silent (0 prefixes) |
+| Space Squatting | -50 | Announcing RIR reserved space |
 
 ## Threat Score (35%)
 
@@ -42,6 +44,7 @@ Measures association with malicious activity.
 | Phishing | -5/domain | Hosting phishing infrastructure |
 | Malware | -10/sample | Distributing malware |
 | High Spam Rate | -20 | Excessive spam emission |
+| WHOIS Entropy | -10 | Algorithmically generated Org Name |
 
 ## Stability Score (25%)
 
@@ -52,6 +55,9 @@ Assesses operational reliability based on historical behavior.
 | High Churn | -20 | Excessive route changes |
 | Withdrawal Spikes | -15 | Abnormal withdrawal patterns |
 | Path Instability | -10 | Frequent AS path changes |
+| Downstream Risk | -20 | Providing transit to low-score ASNs |
+| DDoS Sponge | -15 | Frequently blackholed by upstreams |
+| Traffic Chaos | -10 | Excessive path prepending (>3x) |
 
 ## Score History
 

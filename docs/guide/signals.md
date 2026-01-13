@@ -119,3 +119,45 @@ Boolean indicating WHOIS information is hidden or uses privacy services.
 - **Type**: Boolean
 - **Source**: WHOIS queries
 - **Update Frequency**: Weekly
+
+### is_zombie_asn (Phase 4)
+
+Boolean indicating the ASN is registered in WHOIS but announces 0 prefixes.
+
+- **Type**: Boolean
+- **Source**: WHOIS + BGP Cross-reference
+- **Update Frequency**: Daily
+
+### whois_entropy (Phase 4)
+
+Shannon entropy score of the Organization Name. High values indicate algorithmically generated names (shell companies).
+
+- **Type**: Float
+- **Source**: WHOIS
+- **Update Frequency**: Weekly
+
+### downstream_score (Phase 4)
+
+Average risk score of this ASN's top downstream customers. "Guilt by association".
+
+- **Type**: Integer (0-100)
+- **Source**: Graph Analysis
+- **Update Frequency**: Daily
+
+## Forensics Signals (Phase 5)
+
+### ddos_blackhole_count
+
+Count of prefixes tagged with "Blackhole" communities by upstream providers. Indicates the ASN is a target of DDoS attacks.
+
+- **Type**: Integer
+- **Source**: BGP Communities
+- **Update Frequency**: Real-time
+
+### excessive_prepending_count
+
+Count of AS paths showing >3x self-prepending. Indicates manual traffic engineering struggles or instability.
+
+- **Type**: Integer
+- **Source**: BGP AS Path
+- **Update Frequency**: Real-time

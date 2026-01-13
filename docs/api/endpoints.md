@@ -54,6 +54,10 @@ curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169
       "has_peeringdb_profile": false,
       "upstream_tier1_count": 1,
       "is_whois_private": false
+    },
+    "forensics": {
+      "ddos_blackhole_count": 0,
+      "excessive_prepending_count": 0
     }
   },
   "details": [
