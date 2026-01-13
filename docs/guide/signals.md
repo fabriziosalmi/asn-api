@@ -120,7 +120,7 @@ Boolean indicating WHOIS information is hidden or uses privacy services.
 - **Source**: WHOIS queries
 - **Update Frequency**: Weekly
 
-### is_zombie_asn (Phase 4)
+### is_zombie_asn
 
 Boolean indicating the ASN is registered in WHOIS but announces 0 prefixes.
 
@@ -128,7 +128,7 @@ Boolean indicating the ASN is registered in WHOIS but announces 0 prefixes.
 - **Source**: WHOIS + BGP Cross-reference
 - **Update Frequency**: Daily
 
-### whois_entropy (Phase 4)
+### whois_entropy
 
 Shannon entropy score of the Organization Name. High values indicate algorithmically generated names (shell companies).
 
@@ -136,7 +136,7 @@ Shannon entropy score of the Organization Name. High values indicate algorithmic
 - **Source**: WHOIS
 - **Update Frequency**: Weekly
 
-### downstream_score (Phase 4)
+### downstream_score
 
 Average risk score of this ASN's top downstream customers. "Guilt by association".
 
@@ -144,7 +144,7 @@ Average risk score of this ASN's top downstream customers. "Guilt by association
 - **Source**: Graph Analysis
 - **Update Frequency**: Daily
 
-## Forensics Signals (Phase 5)
+## Forensics Signals
 
 ### ddos_blackhole_count
 
