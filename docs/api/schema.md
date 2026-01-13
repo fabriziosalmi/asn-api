@@ -13,6 +13,7 @@ interface RiskScoreResponse {
   risk_score: number                // 0-100
   risk_level: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
   rank_percentile: number           // 0.00-100.00
+  downstream_score: number | null   // 0-100
   last_updated: string              // ISO 8601 timestamp
   breakdown: ScoreBreakdown
   signals: AllSignals

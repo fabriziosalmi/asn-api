@@ -62,6 +62,12 @@ Detailed explanation of all response fields and their meanings.
 - **Example**: `95.4` means this ASN is less risky than 95.4% of the global internet
 - **Interpretation**: Higher is better. 99+ is Elite, <50 is Hazardous.
 
+### downstream_score
+- **Type**: Integer (0-100) or null
+- **Description**: "Cone of Silence" Score. Average risk score of this ASN's top downstream clients.
+- **Interpretation**: logic "Guilt by association". If you sell to bad actors, your score drops.
+- **Threshold**: <70 triggers a penalty.
+
 ## Score Breakdown
 
 ### breakdown.hygiene

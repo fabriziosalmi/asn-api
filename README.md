@@ -51,9 +51,9 @@ curl -X POST -H "X-API-Key: dev-secret" -H "Content-Type: application/json" \
 
 | Component | Weight | Signals |
 |-----------|--------|---------|
-| **Hygiene** (40%) | RPKI validation, route leaks, bogon advertisements, stub-to-transit violations |
-| **Threats** (35%) | Spamhaus listings, botnet C2, phishing domains, malware distribution |
-| **Stability** (25%) | BGP churn rate, announcement volatility, path instability |
+| **Hygiene** (40%) | RPKI validation, route leaks, bogon advertisements, **Zombie ASNs** (0 prefixes) |
+| **Threats** (35%) | Spamhaus listings, botnet C2, phishing, malware, **WHOIS Entropy** (SOTA) |
+| **Stability** (25%) | BGP churn rate, announcement volatility, **Downstream Risk** (Cone of Silence) |
 
 **Score Range**: 0-100 (higher is better)
 - 90-100: LOW risk
@@ -76,6 +76,17 @@ curl -X POST -H "X-API-Key: dev-secret" -H "Content-Type: application/json" \
 - [x] BGP topology visualization
 - [x] Route leak detection (valley-free violations)
 - [x] Predictive BGP stability analysis
+
+### Phase 3: Production Readiness ✅
+- [x] Automated Test Suite (`pytest`)
+- [x] GitLab CI/CD Pipeline
+- [x] Rate Limiting Strategy (`RATELIMIT.md`)
+
+### Phase 4: Advanced Intelligence (SOTA) ✅
+- [x] **Downstream Risk Analysis** ("Cone of Silence")
+- [x] **Zombie ASN Detection** (Parked Networks)
+- [x] **WHOIS Entropy Scoring** (Anti-shell company)
+- [x] **Peer Pressure Dashboard**
 
 ## Dashboards
 
@@ -158,6 +169,9 @@ docker-compose exec db-timeseries clickhouse-client
 
 # Restart specific service
 docker-compose restart asn-api
+
+# Run Tests
+pytest
 ```
 
 ## Project Structure

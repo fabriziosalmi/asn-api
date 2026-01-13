@@ -196,10 +196,55 @@ class RiskScorer:
             'recent_threat_count': recent_threat_count,
             'avg_upstream_score': avg_upstream_score,
             'is_predictive_unstable': is_predictive_unstable,
-             # Phase 4 Signals
+            # Phase 4 Signals
             'downstream_score': self._analyze_downstreams(asn),
-            'zombie_status': current_prefix_count == 0
+            'zombie_status': current_prefix_count == 0,
+            
+            # Phase 5 Forensics
+            'ddos_blackhole_count': self._analyze_bgp_communities(asn),
+            'excessive_prepending_count': self._analyze_traffic_engineering(asn)
         }
+
+    def _analyze_bgp_communities(self, asn):
+        """
+        [Phase 5] DDoS Sponge Detection.
+        Detects if this ASN's prefixes are frequently tagged with Blackhole communities (e.g. 65535:666).
+        """
+        # Query for standard blackhole values in the 'community' array
+        # 4294902426 = 65535 * 65536 + 666
+        query = """
+        SELECT count() 
+        FROM bgp_events 
+        WHERE asn = %(asn)s 
+          AND timestamp > now() - INTERVAL 7 DAY
+          AND has(community, 4294902426)
+        """
+        try:
+            res = self.ch_client.execute(query, {'asn': asn})
+            return res[0][0] if res else 0
+        except Exception:
+            return 0
+
+    def _analyze_traffic_engineering(self, asn):
+        """
+        [Phase 5] Traffic Engineering Chaos.
+        Detects excessive AS Path Prepending (e.g. [123, 123, 123, 123]).
+        """
+        # We look for path arrays where the ASN appears > 3 times consecutively
+        # ClickHouse array logic is tricky for "consecutive", but we can count occurrences
+        # If an ASN prepends 3x, it appears 4x total in the path.
+        query = """
+        SELECT count() 
+        FROM bgp_events 
+        WHERE asn = %(asn)s 
+          AND timestamp > now() - INTERVAL 7 DAY
+          AND countEqual(path, %(asn)s) > 3
+        """
+        try:
+            res = self.ch_client.execute(query, {'asn': asn})
+            return res[0][0] if res else 0
+        except Exception:
+            return 0
 
     def _analyze_downstreams(self, asn):
         """
@@ -374,6 +419,20 @@ class RiskScorer:
              score -= penalty; breakdown['threat'] -= penalty
              details.append(f"High WHOIS Entropy ({entropy:.2f}): Possible generated name")
         
+        # --- PHASE 5: BGP FORENSICS ---
+        
+        # 1. DDoS Sponge (Blackhole Communities)
+        if t.get('ddos_blackhole_count', 0) > 5:
+            penalty = 15
+            score -= penalty; breakdown['stability'] -= penalty
+            details.append("DDoS Sponge: Frequent Blackholing detected (Victim/Target)")
+            
+        # 2. Traffic Engineering Chaos (Prepending)
+        if t.get('excessive_prepending_count', 0) > 10:
+            penalty = 10
+            score -= penalty; breakdown['stability'] -= penalty
+            details.append("Traffic Engineering Chaos: Excessive BGP Prepending")
+
         # Cap score 0-100
         final_score = max(0, min(100, score))
         
@@ -398,6 +457,8 @@ class RiskScorer:
         if metrics:
             downstream_score = metrics.get('downstream_score', 100)
             is_zombie = metrics.get('zombie_status', False)
+            ddos_BH = metrics.get('ddos_blackhole_count', 0)
+            excessive_prepend = metrics.get('excessive_prepending_count', 0)
 
         with self.pg_engine.connect() as conn:
             # Update Registry
@@ -422,12 +483,19 @@ class RiskScorer:
                 'asn': asn
             })
             
-            # Update Signals (Zombie Status)
+            # Update Signals (Zombie & Forensics)
             conn.execute(text("""
                 UPDATE asn_signals
-                SET is_zombie_asn = :zombie
+                SET is_zombie_asn = :zombie,
+                    ddos_blackhole_count = :bh,
+                    excessive_prepending_count = :ep
                 WHERE asn = :asn
-            """), {'zombie': is_zombie, 'asn': asn})
+            """), {
+                'zombie': is_zombie, 
+                'bh': ddos_BH,
+                'ep': excessive_prepend,
+                'asn': asn
+            })
             
             conn.commit()
             

@@ -89,10 +89,15 @@ class MetadataSignals(BaseModel):
     upstream_tier1_count: int = 0
     is_whois_private: bool = False
 
+class ForensicsSignals(BaseModel):
+    ddos_blackhole_count: int = 0
+    excessive_prepending_count: int = 0
+
 class AllSignals(BaseModel):
     hygiene: HygieneSignals
     threats: ThreatSignals
     metadata: MetadataSignals
+    forensics: ForensicsSignals
 
 class PenaltyDetail(BaseModel):
     code: str
@@ -292,16 +297,17 @@ def get_asn_score(asn: int, response: Response, request: Request, api_key: str =
         logger.error(f"Cache error: {e}")
         request.state.cache_hit = False
     
-        query = text("""
-            SELECT r.asn, r.name, r.country_code, r.registry,
-                   r.total_score, r.risk_level, r.last_scored_at, r.downstream_score,
-                   r.hygiene_score, r.threat_score, r.stability_score,
+    query = text("""
+        SELECT r.asn, r.name, r.country_code, r.registry,
+               r.total_score, r.risk_level, r.last_scored_at, r.downstream_score,
+               r.hygiene_score, r.threat_score, r.stability_score,
                s.rpki_invalid_percent, s.rpki_unknown_percent,
                s.has_route_leaks, s.has_bogon_ads, s.is_stub_but_transit,
                s.prefix_granularity_score,
                s.spamhaus_listed, s.spam_emission_rate,
                s.botnet_c2_count, s.phishing_hosting_count, s.malware_distribution_count,
-               s.has_peeringdb_profile, s.upstream_tier1_count, s.is_whois_private
+               s.has_peeringdb_profile, s.upstream_tier1_count, s.is_whois_private,
+               s.ddos_blackhole_count, s.excessive_prepending_count
         FROM asn_registry r
         LEFT JOIN asn_signals s ON r.asn = s.asn
         WHERE r.asn = :asn
@@ -370,6 +376,10 @@ def get_asn_score(asn: int, response: Response, request: Request, api_key: str =
                     "has_peeringdb_profile": result['has_peeringdb_profile'] or False,
                     "upstream_tier1_count": result['upstream_tier1_count'] or 0,
                     "is_whois_private": result['is_whois_private'] or False
+                },
+                "forensics": {
+                    "ddos_blackhole_count": result.get('ddos_blackhole_count') or 0,
+                    "excessive_prepending_count": result.get('excessive_prepending_count') or 0
                 }
             },
             # Map Pydantic models to dicts for JSON serialization if needed, or let FastAPI handle it

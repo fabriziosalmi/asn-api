@@ -88,6 +88,25 @@ class DataIngestor:
             # Just take the first prefix for simplicity in this demo logic
             prefix = announcements[0].get("prefixes", ["0.0.0.0/0"])[0]
 
+            # Extract Communities (Phase 5 Forensics)
+            communities = []
+            raw_comms = msg.get("communities", [])
+            for c in raw_comms:
+                # Format: 64496:1 or just an int. ClickHouse expects UInt32.
+                # RIPE RIS often sends [asn, value].
+                # For this MVP we just hash/compress them or take the second part if colon
+                try:
+                    if isinstance(c, list) and len(c) == 2:
+                         # 32-bit ASN + 16-bit val? No, standard community is 16:16.
+                         # Large community is 32:32:32.
+                         # Let's map to a simple INT representation or just take the value
+                         # Store as "ASN * 65536 + VAL" if 16bit, or just keep as list of integers if flat
+                         val = c[0] * 65536 + c[1] 
+                         communities.append(val)
+                    elif isinstance(c, int):
+                         communities.append(c)
+                except: continue
+
             return {
                 'timestamp': datetime.now(),
                 'asn': int(origin_asn),
@@ -95,7 +114,7 @@ class DataIngestor:
                 'event_type': 'announce',
                 'upstream_as': int(upstream_asn),
                 'path': [int(p) for p in path if isinstance(p, int)], 
-                'community': [] # Communities parsing ommitted for brevity
+                'community': communities
             }
         except Exception:
             return None

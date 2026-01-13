@@ -27,6 +27,7 @@ curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169
   "risk_score": 55,
   "risk_level": "HIGH",
   "rank_percentile": 95.4,
+  "downstream_score": 50,
   "last_updated": "2026-01-11 23:03:28.308666+00:00",
   "breakdown": {
     "hygiene": 100,

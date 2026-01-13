@@ -48,6 +48,10 @@ CREATE TABLE IF NOT EXISTS asn_signals (
     is_zombie_asn BOOLEAN DEFAULT FALSE,
     whois_entropy DECIMAL(5,2) DEFAULT 0.0,
     
+    -- Phase 5 Forensics
+    ddos_blackhole_count INTEGER DEFAULT 0,
+    excessive_prepending_count INTEGER DEFAULT 0,
+    
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     PRIMARY KEY (asn)
 );
