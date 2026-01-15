@@ -1,6 +1,6 @@
-# ASN Risk Intelligence Platform
+# ASN API
 
-Production-ready risk scoring for Autonomous Systems using BGP telemetry and threat intelligence.
+A risk scoring API for Autonomous Systems using BGP telemetry and threat intelligence.
 
 ## Status
 
