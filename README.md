@@ -1,6 +1,6 @@
 # ASN API
 
-A risk scoring API for Autonomous Systems using BGP telemetry and threat intelligence.
+Autonomous Systems scoring using BGP telemetry and threat intelligence.
 
 ## Status
 
