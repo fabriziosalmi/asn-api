@@ -49,7 +49,8 @@ Wait 2-3 minutes for initial data ingestion and database initialization. Then ac
 |---------|-----|-------------|
 | **API Documentation** | http://localhost:8080/docs | API Key: `dev-secret` |
 | **Grafana Dashboards** | http://localhost:3000 | admin / admin |
-| **VitePress Documentation** | http://localhost:5173 | Run `cd docs && npm install && npm run dev` |
+| **Online Documentation** | https://fabriziosalmi.github.io/asn-api/ | Public access |
+| **Local Docs (Dev)** | http://localhost:5173 | Run `cd docs && npm install && npm run dev` |
 
 ## Architecture
 
@@ -363,8 +364,14 @@ Grafana automatically installs the ClickHouse plugin on startup.
 
 ## Documentation
 
-Comprehensive documentation available in [docs/](./docs/):
+Comprehensive documentation is available:
 
+### Online Documentation
+- **GitHub Pages**: https://fabriziosalmi.github.io/asn-api/
+
+Automatically deployed from the `main` branch using GitHub Actions.
+
+### Local Development
 ```bash
 cd docs && npm install && npm run dev
 ```
@@ -702,7 +709,18 @@ asn-api/
 
 Comprehensive documentation is available in multiple formats:
 
-### Interactive Documentation (VitePress)
+### Online Documentation (GitHub Pages)
+
+**Live Documentation**: https://fabriziosalmi.github.io/asn-api/
+
+The documentation is automatically deployed to GitHub Pages when changes are pushed to the `main` branch. It includes:
+- **API Reference** - Detailed endpoint documentation with examples
+- **Architecture** - Deep-dive into system design and data flow
+- **Field Reference** - Complete signal and metric definitions
+- **Configuration Guide** - Environment setup and tuning
+- **Integration Guides** - How to integrate with external systems
+
+### Local Documentation Development (VitePress)
 
 ```bash
 cd docs
@@ -710,12 +728,7 @@ npm install
 npm run dev
 ```
 
-Then visit http://localhost:5173 for:
-- **API Reference** - Detailed endpoint documentation with examples
-- **Architecture** - Deep-dive into system design and data flow
-- **Field Reference** - Complete signal and metric definitions
-- **Configuration Guide** - Environment setup and tuning
-- **Integration Guides** - How to integrate with external systems
+Then visit http://localhost:5173 for local development and testing of documentation changes.
 
 ### API Documentation (OpenAPI/Swagger)
 

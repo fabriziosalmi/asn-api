@@ -3,10 +3,11 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'ASN Risk Platform',
   description: 'Autonomous System Risk Intelligence Documentation',
+  base: '/asn-api/',
   ignoreDeadLinks: true,
 
   head: [
-    ['link', { rel: 'icon', href: '/favicon.ico' }]
+    ['link', { rel: 'icon', href: '/asn-api/favicon.ico' }]
   ],
 
   themeConfig: {
