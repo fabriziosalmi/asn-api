@@ -2,7 +2,7 @@
 
 > **Real-time trust scoring for Internet Autonomous Systems using BGP telemetry, threat intelligence, and network topology analysis**
 
-[![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Non--Commercial-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
 
@@ -955,11 +955,18 @@ git push origin feature/amazing-feature
 
 ## License
 
-**Proprietary License** - All rights reserved
+**Non-Commercial Use License**
 
-This software is proprietary and confidential. Unauthorized copying, modification, distribution, or use of this software is strictly prohibited.
+This software is licensed under a custom non-commercial license that allows you to:
+- ✅ Clone and use the software for personal, educational, or research purposes
+- ✅ Modify and customize the software to suit your needs
+- ✅ Distribute copies and create derivative works
 
-For licensing inquiries, please contact the repository owner.
+However, **commercial use is strictly prohibited** without prior written consent from Fabrizio Salmi, the repository owner. This includes selling the software, using it in commercial products or services, or monetizing access to its functionality.
+
+For commercial licensing inquiries or to request permission for commercial use, please contact the repository owner through GitHub or open an issue.
+
+See the [LICENSE](LICENSE) file for complete terms and conditions.
 
 ---
 
