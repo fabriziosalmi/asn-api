@@ -1,3 +1,5 @@
+# Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
+
 import requests
 import time
 

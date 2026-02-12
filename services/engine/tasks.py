@@ -1,3 +1,5 @@
+# Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
+
 from celery import Celery
 import os
 from scorer import RiskScorer

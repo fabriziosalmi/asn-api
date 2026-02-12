@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
 # Load Test Script for ASN API
 # Generates realistic traffic patterns to populate Grafana dashboard
 
