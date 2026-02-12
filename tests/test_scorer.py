@@ -1,3 +1,5 @@
+# Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
+
 from services.engine.scorer import RiskScorer
 
 # Mock for DB results

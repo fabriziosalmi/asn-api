@@ -1,3 +1,5 @@
+# Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
+
 import pytest
 from starlette.testclient import TestClient
 import sys
