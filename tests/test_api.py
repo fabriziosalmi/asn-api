@@ -3,7 +3,8 @@
 def test_read_main(client):
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+    assert response.json()["status"] == "healthy"
+    assert "dependencies" in response.json()
 
 def test_get_asn_score_no_auth(client):
     response = client.get("/asn/1234")

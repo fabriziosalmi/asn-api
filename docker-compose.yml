@@ -24,6 +24,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
 
   # ClickHouse: Time Series, BGP Updates, Logs
   db-timeseries:
@@ -51,6 +56,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
 
   # Redis: Message Broker & API Cache
   broker-cache:
@@ -93,6 +103,11 @@ services:
     networks:
       - asn_backend
       - asn_public
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
 
   # Engine: Calculates Risk Scores (Batch & Realtime)
   asn-engine:
@@ -120,6 +135,11 @@ services:
     networks:
       - asn_backend
       - asn_public
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
 
   # ------------------------------------------------------------------
   # 3. INTERFACE LAYER (API & DASHBOARD)
@@ -131,8 +151,6 @@ services:
       context: ./services/api
     container_name: asn_api_gateway
     restart: always
-    ports:
-      - "8080:80"
     depends_on:
       db-metadata:
         condition: service_healthy
@@ -151,24 +169,25 @@ services:
     networks:
       - asn_backend
       - asn_public
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
 
-  # Visualizations
   dashboard:
     image: grafana/grafana:latest
     container_name: asn_viz
-    ports:
-      - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./services/dashboard/provisioning:/etc/grafana/provisioning
       - ./services/dashboard/dashboards:/etc/grafana/provisioning/dashboards/json
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${POSTGRES_PASSWORD} # Use a secure password from env
       - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
-      # SOTA: Install ClickHouse plugin automatically
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      # Install ClickHouse plugin automatically
       - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
       # Datasource Credentials
       - CLICKHOUSE_USER=${CLICKHOUSE_USER}
@@ -184,6 +203,32 @@ services:
         condition: service_healthy
       db-metadata:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+
+  # Nginx Reverse Proxy
+  proxy:
+    image: nginx:stable-alpine
+    container_name: asn_proxy
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./services/proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - asn-api
+      - dashboard
+    networks:
+      - asn_backend
+      - asn_public
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
 
 # ------------------------------------------------------------------
 # NETWORKS & VOLUMES

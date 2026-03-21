@@ -69,6 +69,24 @@ CREATE TABLE IF NOT EXISTS asn_score_history (
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (asn, timestamp);
 
+-- [Phase 5] Forensic Metrics for BGP Prepending
+CREATE TABLE IF NOT EXISTS forensic_metrics (
+    date Date,
+    asn UInt32,
+    prepends_count UInt32
+) ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (date, asn);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS forensic_prepending_mv TO forensic_metrics AS
+SELECT 
+    toDate(timestamp) as date,
+    asn,
+    count() as prepends_count
+FROM bgp_events
+WHERE countEqual(path, asn) > 3
+GROUP BY date, asn;
+
 -- API Request Logging
 CREATE TABLE IF NOT EXISTS api_requests (
     timestamp DateTime,

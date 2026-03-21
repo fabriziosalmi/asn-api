@@ -10,7 +10,12 @@ import requests
 from datetime import datetime
 from clickhouse_driver import Client
 import redis
+import logging
 from celery import Celery
+
+# Logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("ingestor")
 
 # Configuration
 CLICKHOUSE_HOST = os.getenv('CLICKHOUSE_HOST', 'db-timeseries')
@@ -31,21 +36,22 @@ class DataIngestor:
     async def connect_ripe_ris(self):
         """
         Connects to RIPE RIS Live WebSocket to process REAL BGP updates.
-        This provides real-time visibility into global routing changes.
         """
         uri = "wss://ris-live.ripe.net/v1/ws/"
-        print(f"[RIPE RIS] Connecting to {uri}...")
+        logger.info(f"[RIPE RIS] Connecting to {uri}...")
         
+        backoff = 1
         while self.running:
             try:
                 async with websockets.connect(uri) as websocket:
-                    # Subscribe to a stream (e.g., all updates from RRC21 - widely used collector)
+                    backoff = 1 # Reset backoff on success
+                    # Subscribe to a stream
                     subscribe_msg = {
                         "type": "ris_subscribe",
                         "data": {
                             "host": "rrc21",
                             "type": "UPDATE",
-                            "require": "announcements" # Only announcements for now
+                            "require": "announcements"
                         }
                     }
                     await websocket.send(json.dumps(subscribe_msg))
@@ -57,9 +63,9 @@ class DataIngestor:
                     async for message in websocket:
                         data = json.loads(message)
                         if data["type"] == "ris_message":
-                            parsed = self._parse_ripe_message(data["data"])
-                            if parsed:
-                                batch.append(parsed)
+                            parsed_list = self._parse_ripe_message(data["data"])
+                            if parsed_list:
+                                batch.extend(parsed_list)
 
                         # Flush to ClickHouse every 2 seconds or 1000 items
                         if len(batch) >= 1000 or (time.time() - last_flush > 2.0 and batch):
@@ -68,56 +74,53 @@ class DataIngestor:
                             last_flush = time.time()
                             
             except Exception as e:
-                print(f"[RIPE RIS] Connection error: {e}. Reconnecting in 5s...")
-                await asyncio.sleep(5)
+                print(f"[RIPE RIS] Connection error: {e}. Reconnecting in {backoff}s...")
+                await asyncio.sleep(backoff)
+                backoff = min(60, backoff * 2) # Exponential backoff capped at 60s
 
     def _parse_ripe_message(self, msg):
         """
-        Parses raw RIPE RIS JSON into our DB schema.
+        Robust Multi-Prefix Parsing.
+        Processes ALL prefixes in an announcement to prevent data loss.
         """
         try:
             # Extract Path
             path = msg.get("path", [])
             if not path: return None
             
-            origin_asn = path[-1] # Last AS is origin
-            upstream_asn = path[-2] if len(path) > 1 else 0 # AS before origin
+            origin_asn = path[-1]
+            upstream_asn = path[-2] if len(path) > 1 else 0
             
-            # Extract Announcements
+            # Extract ALL Announcements
             announcements = msg.get("announcements", [])
             if not announcements: return None
             
-            # Just take the first prefix for simplicity in this demo logic
-            prefix = announcements[0].get("prefixes", ["0.0.0.0/0"])[0]
-
-            # Extract Communities (Phase 5 Forensics)
+            # Extract Communities
             communities = []
             raw_comms = msg.get("communities", [])
             for c in raw_comms:
-                # Format: 64496:1 or just an int. ClickHouse expects UInt32.
-                # RIPE RIS often sends [asn, value].
-                # For this MVP we just hash/compress them or take the second part if colon
                 try:
                     if isinstance(c, list) and len(c) == 2:
-                         # 32-bit ASN + 16-bit val? No, standard community is 16:16.
-                         # Large community is 32:32:32.
-                         # Let's map to a simple INT representation or just take the value
-                         # Store as "ASN * 65536 + VAL" if 16bit, or just keep as list of integers if flat
                          val = c[0] * 65536 + c[1] 
                          communities.append(val)
                     elif isinstance(c, int):
                          communities.append(c)
                 except: continue
 
-            return {
-                'timestamp': datetime.now(),
-                'asn': int(origin_asn),
-                'prefix': str(prefix),
-                'event_type': 'announce',
-                'upstream_as': int(upstream_asn),
-                'path': [int(p) for p in path if isinstance(p, int)], 
-                'community': communities
-            }
+            events = []
+            for announce in announcements:
+                prefixes = announce.get("prefixes", [])
+                for prefix in prefixes:
+                    events.append({
+                        'timestamp': datetime.now(),
+                        'asn': int(origin_asn),
+                        'prefix': str(prefix),
+                        'event_type': 'announce',
+                        'upstream_as': int(upstream_asn),
+                        'path': [int(p) for p in path if isinstance(p, int)], 
+                        'community': communities
+                    })
+            return events
         except Exception:
             return None
 
@@ -279,7 +282,7 @@ class DataIngestor:
 
                 print(f"[Threat] Stats: {stats}. Total Networks: {len(threat_prefixes)}, Total IPs: {len(threat_ips)}")
 
-                # 2. Correlate with Active BGP view
+                # 2. Correlate with Active BGP view (Optimized)
                 # Get all prefixes announced in the last hour
                 query = """
                 SELECT prefix, argMax(asn, timestamp) as asn
@@ -293,8 +296,8 @@ class DataIngestor:
 
                 found_threats = 0
                 
-                # Pre-compile threat networks for speed
-                # Note: Optimizing this is key for scale, but for <50k threats this is okay in Python
+                # Optimization: Use a set for exact prefix matches (O(1) vs O(N))
+                # And only use the heavy overlap check if necessary
                 bad_networks_obj = []
                 for tp in threat_prefixes:
                     try:
@@ -303,37 +306,31 @@ class DataIngestor:
                 
                 for route_prefix, route_asn in active_routes:
                     try:
-                        route_net = ipaddress.ip_network(route_prefix)
-                        
-                        # Check 1: Is this route a Known Bad Network? (Exact or Overlap)
-                        # Speed check: Exact string match first
                         source_match = None
                         
+                        # Check 1: Exact Match (Fastest)
                         if route_prefix in threat_prefixes:
                             source_match = "Spamhaus (Exact)"
-                        else:
-                            # Slower overlap check
+                        
+                        # Check 2: IP inside route (if route is /32 or similar)
+                        # For brevity and MVP, we check if the route prefix START matches any threat IP
+                        # but a real FAANG system would use a Radix Tree (Pytricia)
+                        if not source_match:
+                            # Heuristic: if it's a small route, check if any threat IP is inside
+                            # For now, we use a simple set check for the network address
+                            net_addr = route_prefix.split('/')[0]
+                            if net_addr in threat_ips:
+                                source_match = "CINS/URLHaus (NetAddr Match)"
+
+                        # Check 3: Overlap (Slower, only if not found)
+                        if not source_match:
+                            route_net = ipaddress.ip_network(route_prefix)
                             for bad_net in bad_networks_obj:
                                 if bad_net.overlaps(route_net):
                                     source_match = "Spamhaus (Overlap)"
                                     break
-                        
-                        # Check 2: Does this route contain a Known Bad IP?
-                        # Only check if not already flagged
-                        if not source_match and threat_ips:
-                            # This is O(N*M), slow. 
-                            # Optimization: Only check if route is small? 
-                            # Or reverse check: Iterate IPs and find container?
-                            # For MVP (Phase 1), we skip the heavy loop unless the route is suspicious?
-                            # Let's do a simplified check: 
-                            # If we have 500 routes and 10k IPs, loop IPs is heavy.
-                            # Just check first 100 IPs for demo purposes? No, we need Security.
-                            # Better: We assume CINS IPs are /32. 
-                            # Check if the network address of the route matches any threat IP? No.
-                            pass 
 
                         if source_match:
-                            # Detect!
                             threat_event = [{
                                 'timestamp': datetime.now(),
                                 'asn': route_asn,
@@ -355,10 +352,9 @@ class DataIngestor:
                             self.celery_app.send_task('tasks.calculate_asn_score', args=[route_asn])
                             found_threats += 1
                     
-                    except Exception as loop_e:
+                    except Exception:
                         continue
                     
-                    # Yield every 1000 items to avoid blocking the event loop
                     if found_threats % 100 == 0:
                         await asyncio.sleep(0)
 
@@ -470,13 +466,17 @@ class DataIngestor:
             await asyncio.sleep(300)
 
     async def start(self):
-        # Wait for DBs to be ready
-        print("Waiting for database connections...")
-        await asyncio.sleep(5) 
-        
-        # SOTA: Running ONLY Real Streams as requested (Simulations disabled)
-        # task1 = asyncio.create_task(self.simulate_bgp_stream())
-        # task2 = asyncio.create_task(self.simulate_threat_intel_feed())
+        # Robust wait for dependencies
+        logger.info("Verifying database connectivity...")
+        while True:
+            try:
+                self.ch_client.execute("SELECT 1")
+                self.redis_client.ping()
+                logger.info("Databases are ONLINE.")
+                break
+            except Exception as e:
+                logger.warning(f"Waiting for DBs: {e}")
+                await asyncio.sleep(2)
         
         task3 = asyncio.create_task(self.connect_ripe_ris())
         task4 = asyncio.create_task(self.scan_noisy_neighbors())

@@ -47,57 +47,19 @@ Wait 2-3 minutes for initial data ingestion and database initialization. Then ac
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| **API Documentation** | http://localhost:8080/docs | API Key: `dev-secret` |
-| **Grafana Dashboards** | http://localhost:3000 | admin / admin |
-| **Online Documentation** | https://fabriziosalmi.github.io/asn-api/ | Public access |
-| **Local Docs (Dev)** | http://localhost:5173 | Run `cd docs && npm install && npm run dev` |
+| API Documentation | http://localhost/api/docs | API Key: `dev-secret` |
+| Grafana Dashboards | http://localhost/dashboard/ | admin / ${POSTGRES_PASSWORD} |
+| VitePress Docs | http://localhost:5173 | (from docs/ dir) |
 
 ## Architecture
 
 ### System Design
 
 ```
-┌─────────────────┐
-│  RIPE RIS Live  │ BGP Stream (WebSocket)
-│  Threat Feeds   │ Spamhaus, URLhaus, PhishTank
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   Ingestor      │ BGP Parser & Threat Aggregator
-│   (Python)      │ Normalizes and stores raw events
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  ClickHouse     │ Time-Series Database
-│  (Events Log)   │ 2.3M+ BGP events, threat history
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   Scoring       │ Risk Analysis Engine
-│   Engine        │ 30+ signals, ML-based stability
-│   (Celery)      │ Downstream/upstream analysis
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   PostgreSQL    │ Current State Database
-│   (Registry)    │ Scores, metadata, signals
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐      ┌─────────────┐
-│   FastAPI       │◄─────┤   Redis     │
-│   REST API      │      │   (Cache)   │
-└─────────────────┘      └─────────────┘
-         │
-         ▼
-┌─────────────────┐
-│    Grafana      │ Real-time Dashboards
-│    Dashboards   │ Mission Control, API Performance
-└─────────────────┘
+Internet --> Nginx (80) --> api (8000) --> PostgreSQL (State)
+             |          --> grafana (3000)
+             |
+BGP Stream --> ingestor --> ClickHouse (History) <-- engine (Worker)
 ```
 
 ### Technology Stack
@@ -157,12 +119,26 @@ Wait 2-3 minutes for initial data ingestion and database initialization. Then ac
 All API endpoints require an API key passed via the `X-API-Key` header:
 
 ```bash
-curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169
+# Get ASN risk score
+curl -H "X-API-Key: dev-secret" http://localhost/api/asn/15169
+
+# Score history (last 30 days)
+curl -H "X-API-Key: dev-secret" http://localhost/api/asn/15169/history
+
+# Bulk analysis
+curl -X POST -H "X-API-Key: dev-secret" -H "Content-Type: application/json" \
+  -d '{"asns": [15169, 13335, 3356]}' http://localhost/api/tools/bulk-risk-check
 ```
 
 ### Core Endpoints
 
-#### Get ASN Risk Score
+| Component | Weight | Signals |
+|-----------|--------|---------|
+| **Hygiene** (40%) | RPKI validation, route leaks, bogon advertisements, **Zombie ASNs** (0 prefixes) |
+| **Threats** (35%) | Spamhaus listings, botnet C2, phishing, malware, **WHOIS Entropy** |
+| **Stability** (25%) | BGP churn rate, announcement volatility, **Downstream Risk** (Cone of Silence) |
+| **Forensics** (Bonus)| **DDoS Sponge** (Blackholing), **Traffic Chaos** (Prepending), **Space Squatting** |
+| **Enterprise** (Obs) | RFC-Compliant Rate Limiting (`X-RateLimit`), Forensic Dashboards |
 
 Retrieve detailed risk assessment for a specific ASN:
 
@@ -170,37 +146,7 @@ Retrieve detailed risk assessment for a specific ASN:
 curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169
 ```
 
-**Response:**
-```json
-{
-  "asn": 15169,
-  "name": "Google LLC",
-  "country_code": "US",
-  "registry": "ARIN",
-  "risk_score": 95,
-  "risk_level": "LOW",
-  "rank_percentile": 98.5,
-  "downstream_score": 92,
-  "last_updated": "2026-01-15T05:30:00",
-  "breakdown": {
-    "hygiene": 100,
-    "threat": 100,
-    "stability": 95
-  },
-  "signals": {
-    "hygiene": {
-      "rpki_invalid_percent": 0.0,
-      "has_route_leaks": false,
-      "has_bogon_ads": false
-    },
-    "threats": {
-      "spamhaus_listed": false,
-      "botnet_c2_count": 0
-    }
-  },
-  "details": []
-}
-```
+Access Grafana at http://localhost/dashboard/ (admin / ${POSTGRES_PASSWORD}):
 
 #### Get Score History
 
@@ -970,6 +916,7 @@ See the [LICENSE](LICENSE) file for complete terms and conditions.
 
 ---
 
+<<<<<<< HEAD
 ## Acknowledgments
 
 - **RIPE NCC** - BGP data via RIPE RIS live stream
@@ -983,3 +930,6 @@ See the [LICENSE](LICENSE) file for complete terms and conditions.
 **Last Updated**: January 2026  
 **Version**: 1.0.0  
 **Platform Status**: Production Ready
+=======
+**Last Updated**: March 2026
+>>>>>>> f18971a (feat: [Phase 6] Enterprise security and ingestion overhaul)

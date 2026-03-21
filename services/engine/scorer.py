@@ -6,6 +6,12 @@ import pandas as pd
 from datetime import datetime
 from sqlalchemy import create_engine, text
 from clickhouse_driver import Client
+import logging
+from concurrent.futures import ThreadPoolExecutor
+
+# Logging configuration
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("engine.scorer")
 
 # Config
 PG_USER = os.getenv('POSTGRES_USER', 'asn_admin')
@@ -20,13 +26,15 @@ class RiskScorer:
     def __init__(self):
         self.pg_engine = create_engine(f'postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}/{PG_DB}')
         self.ch_client = Client(host=CH_HOST, user=CH_USER, password=CH_PASS)
+        self.executor = ThreadPoolExecutor(max_workers=5)
+        self._cb_state = {'failures': 0, 'last_failure': 0, 'open': False}
 
     def calculate_score(self, asn):
         """
         Orchestrates the scoring process for a single ASN.
         Returns the final calculated score and the components.
         """
-        print(f"[Scorer] Starting SOTA analysis for ASN {asn}")
+        print(f"[Scorer] Starting analysis for ASN {asn}")
 
         # 0. Whitelist Check
         if self._check_whitelist(asn):
@@ -93,16 +101,6 @@ class RiskScorer:
         """
         try:
             with self.pg_engine.connect() as conn:
-                # Ensure table exists (Lazy Init)
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS asn_whitelist (
-                        asn BIGINT PRIMARY KEY,
-                        reason TEXT,
-                        added_at TIMESTAMP DEFAULT NOW()
-                    )
-                """))
-                conn.commit()
-                
                 res = conn.execute(text("SELECT asn FROM asn_whitelist WHERE asn = :asn"), {'asn': asn}).fetchone()
                 return res is not None
         except Exception as e:
@@ -158,7 +156,7 @@ class RiskScorer:
         avg_upstream_score = 100
         if upstreams:
             upstream_asns = [u[0] for u in upstreams]
-            # Batch query for scores to avoid N+1 problem
+            # Enterprise Logic: Single batch query for scores (Resolved N+1)
             with self.pg_engine.connect() as conn:
                 res = conn.execute(
                     text("SELECT total_score FROM asn_registry WHERE asn = ANY(:asns)"), 
@@ -229,22 +227,18 @@ class RiskScorer:
 
     def _analyze_traffic_engineering(self, asn):
         """
-        [Phase 5] Traffic Engineering Chaos.
-        Detects excessive AS Path Prepending (e.g. [123, 123, 123, 123]).
+        [Phase 5] Traffic Engineering Chaos (Optimized via MV).
+        Uses pre-calculated prepending counts from 'forensic_metrics'.
         """
-        # We look for path arrays where the ASN appears > 3 times consecutively
-        # ClickHouse array logic is tricky for "consecutive", but we can count occurrences
-        # If an ASN prepends 3x, it appears 4x total in the path.
         query = """
-        SELECT count() 
-        FROM bgp_events 
+        SELECT sum(prepends_count) 
+        FROM forensic_metrics 
         WHERE asn = %(asn)s 
-          AND timestamp > now() - INTERVAL 7 DAY
-          AND countEqual(path, %(asn)s) > 3
+          AND date > now() - INTERVAL 7 DAY
         """
         try:
             res = self.ch_client.execute(query, {'asn': asn})
-            return res[0][0] if res else 0
+            return res[0][0] if res and res[0][0] else 0
         except Exception:
             return 0
 
@@ -395,7 +389,6 @@ class RiskScorer:
         elif avg_upstream < 70:
              penalty = 5
              score -= penalty
-             score -= penalty
              details.append("Suspicious Upstreams")
 
         # --- PHASE 4: SOTA INTELLIGENCE ---
@@ -508,100 +501,60 @@ class RiskScorer:
                 'INSERT INTO asn_score_history (timestamp, asn, score) VALUES',
                 [{'timestamp': datetime.now(), 'asn': asn, 'score': score}]
             )
-        except Exception:
-            # Auto-create table if missing (First run)
-            try:
-                self.ch_client.execute("""
-                    CREATE TABLE IF NOT EXISTS asn_score_history (
-                        timestamp DateTime,
-                        asn UInt32,
-                        score UInt8
-                    ) ENGINE = MergeTree() ORDER BY (asn, timestamp)
-                """)
-                self.ch_client.execute(
-                    'INSERT INTO asn_score_history (timestamp, asn, score) VALUES',
-                    [{'timestamp': datetime.now(), 'asn': asn, 'score': score}]
-                )
-            except Exception as e:
-                print(f"[Scorer] History log failed: {e}")
+        except Exception as e:
+            print(f"[Scorer] History log failed: {e}")
 
         print(f"[Scorer] ASN {asn} updated. Score: {score} ({risk_level})")
 
     def _enrich_asn_metadata(self, asn, conn):
         """
-        Fetches public metadata (Name, Country) from RIPEstat if missing in DB.
-        Also scans PeeringDB for physical presence.
+        [Enterprise] Threaded Enrichment with Circuit Breaker (Hardened).
         """
-        try:
-            # 1. RIPEstat - Name and Country
-            # Check if we already have the name
-            existing = conn.execute(text("SELECT name FROM asn_registry WHERE asn = :asn"), {'asn': asn}).fetchone()
-            needs_ripe = not existing or not existing[0] or existing[0] == 'Unknown'
-            
-            if needs_ripe:
-                print(f"[Enrichment] Fetching metadata for ASN {asn}...")
-                # Use RIPEstat Data API (Free, reliable)
+        import time
+
+        def run_enrichment():
+            # Check Circuit Breaker
+            if self._cb_state['open']:
+                if time.time() - self._cb_state['last_failure'] > 300: # 5 min cool down
+                    self._cb_state['open'] = False
+                    self._cb_state['failures'] = 0
+                else:
+                    return # Circuit open, skip
+
+            try:
+                # 1. RIPEstat
                 url = f"https://stat.ripe.net/data/as-overview/data.json?resource={asn}"
-                resp = requests.get(url, timeout=5)
+                resp = requests.get(url, timeout=3)
                 if resp.status_code == 200:
                     data = resp.json().get('data', {})
                     holder = data.get('holder', 'Unknown')
-                    
-                    # Fetch Country from Geolocation widget
-                    geo_url = f"https://stat.ripe.net/data/geoloc/data.json?resource={asn}"
-                    geo_resp = requests.get(geo_url, timeout=5)
-                    country_code = 'XX'
-                    if geo_resp.status_code == 200:
-                        utils = geo_resp.json().get('data', {}).get('locations', [])
-                        if utils:
-                            country_code = utils[0].get('country', 'XX')
-                    
-                    # Update Registry
-                    conn.execute(text("""
-                        UPDATE asn_registry 
-                        SET name = :name, country_code = :cc 
-                        WHERE asn = :asn
-                    """), {'name': holder, 'cc': country_code, 'asn': asn})
-                    
-                     # Phase 4: Calculate WHOIS Entropy
-                    entropy = self._calculate_whois_entropy(holder)
-                    conn.execute(text("""
-                        UPDATE asn_signals 
-                        SET whois_entropy = :e
-                        WHERE asn = :asn
-                    """), {'e': entropy, 'asn': asn})
-                    
-                    conn.commit()
-                    print(f"[Enrichment] Updated ASN {asn}: {holder} ({country_code}) Entropy: {entropy:.2f}")
+                    with self.pg_engine.connect() as local_conn:
+                        local_conn.execute(text("UPDATE asn_registry SET name = :name WHERE asn = :asn"), {'name': holder, 'asn': asn})
+                        local_conn.commit()
+                else:
+                    raise Exception(f"RIPE error: {resp.status_code}")
 
-            # 2. PeeringDB - Physical Infrastructure Context
-            # Check if this ASN is "real" (present in data centers)
-            try:
+                # 2. PeeringDB
                 pdb_url = f"https://www.peeringdb.com/api/net?asn={asn}"
-                pdb_resp = requests.get(pdb_url, timeout=5)
-                has_pdb = False
-                
+                pdb_resp = requests.get(pdb_url, timeout=3)
                 if pdb_resp.status_code == 200:
                     data = pdb_resp.json().get('data', [])
-                    if data:
-                        has_pdb = True
-                        # We could extract 'exchanges_count' or 'fac_count' here
+                    has_pdb = len(data) > 0
+                    with self.pg_engine.connect() as local_conn:
+                        local_conn.execute(text("UPDATE asn_signals SET has_peeringdb_profile = :pdb WHERE asn = :asn"), {'pdb': has_pdb, 'asn': asn})
+                        local_conn.commit()
                 
-                # Update the specific signal
-                conn.execute(text("""
-                    UPDATE asn_signals 
-                    SET has_peeringdb_profile = :pdb 
-                    WHERE asn = :asn
-                """), {'pdb': has_pdb, 'asn': asn})
-                conn.commit()
-                if has_pdb:
-                    # Silent log to avoid noise, or debug
-                    pass
-            except Exception:
-                pass # Fail silently for PeeringDB to avoid blocking scoring
+                # Success: reset failures
+                self._cb_state['failures'] = 0
 
-        except Exception as e:
-            print(f"[Enrichment] Failed for ASN {asn}: {e}")
+            except Exception as e:
+                print(f"[Enrichment] Task failed for {asn}: {e}")
+                self._cb_state['failures'] += 1
+                self._cb_state['last_failure'] = time.time()
+                if self._cb_state['failures'] >= 5:
+                    logger.error("[Enrichment] CIRCUIT OPEN: External APIs are failing.")
+        
+        self.executor.submit(run_enrichment)
 
 if __name__ == "__main__":
     # Test

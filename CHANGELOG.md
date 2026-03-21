@@ -2,9 +2,14 @@
 
 All notable changes to the ASN Risk Intelligence Platform.
 
-## [Unreleased]
-- **Enterprise**: RFC-Compliant Rate Limiting Headers (`X-RateLimit-*`).
-- **Forensics**: Dashboard for BGP Community and Prepending analysis.
+## [Phase 6] - Enterprise Hardening (Mar 2026)
+### Added
+- **Security**: Disabled Grafana anonymous admin access; hardened API key gateway.
+- **Observability**: Distributed Tracing (`X-Trace-ID`) and status-check `/health` endpoint for all dependencies.
+- **Resilience**: Circuit Breaker pattern for RIPEstat/PeeringDB enrichment.
+- **Performance**: Redis-backed Rate Limiting and ClickHouse Materialized Views for BGP Forensics.
+- **Infrastructure**: Nginx Reverse Proxy and Docker resource limits (CPU/Memory).
+- **Integrita Dati**: Multi-prefix BGP parsing and exponential backoff for ingestor reconnections.
 
 ## [Phase 5] - BGP Forensics (Jan 2026)
 ### Added

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="ASN Risk API", 
-    version="1.0.0",
+    version="6.0.0",
     description="""
     ## Autonomous System Risk Scoring API
     
@@ -43,14 +43,17 @@ app = FastAPI(
 
 # Security
 API_KEY_NAME = "X-API-Key"
-API_KEY = os.getenv("API_SECRET_KEY", "dev-secret") # In prod, use .env
+API_KEY = os.getenv("API_SECRET_KEY", "dev-secret")
+
+if API_KEY == "dev-secret":
+    logger.warning("! WARNING: Running with DEFAULT API KEY. This is INSECURE for production.")
+
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 async def get_api_key(api_key_header: str = Security(api_key_header)):
-    if api_key_header == API_KEY:
-        return api_key_header
-    # Enforce security for production readiness
-    raise HTTPException(status_code=403, detail="Invalid or Missing API Key")
+    if not api_key_header or api_key_header != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or Missing API Key")
+    return api_key_header
 
 # Database Connections
 PG_USER = os.getenv('POSTGRES_USER', 'asn_admin')
@@ -147,27 +150,59 @@ class BulkAnalysisRequest(BaseModel):
 
 # --- Routes ---
 
-# Middleware for response time tracking and logging
+# Middleware for response time tracking, rate limiting, and logging
 @app.middleware("http")
 async def add_response_time(request: Request, call_next):
     start_time = time.time()
     cache_hit = False
     error_msg = ""
     
+    # 1. Enterprise Rate Limiting (Redis-backed)
+    client_ip = request.client.host if request.client else "0.0.0.0"
+    rate_limit_key = f"rl:{client_ip}"
+    limit = 100 # Default limit
+    window = 60 # 1 minute
+    
+    try:
+        current = redis_client.incr(rate_limit_key)
+        if current == 1:
+            redis_client.expire(rate_limit_key, window)
+        
+        remaining = max(0, limit - current)
+        
+        if current > limit:
+            ttl = redis_client.ttl(rate_limit_key)
+            return Response(
+                content=json.dumps({"detail": f"Rate limit exceeded. Try again in {ttl} seconds."}),
+                status_code=429,
+                media_type="application/json",
+                headers={
+                    "X-RateLimit-Limit": str(limit),
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(int(time.time()) + ttl)
+                }
+            )
+    except Exception as e:
+        logger.error(f"Rate limiting error: {e}")
+        remaining = 99 # Fallback
+
     response = await call_next(request)
     process_time = (time.time() - start_time) * 1000  # Convert to ms
     response.headers["X-Response-Time"] = f"{process_time:.2f}ms"
     
-    # RFC-Compliant Rate Limit Headers (Phase 6 Enterprise)
-    # Ideally tracked via Redis, hardcoded for now or fetched if integrated
-    response.headers["X-RateLimit-Limit"] = "100"
-    response.headers["X-RateLimit-Remaining"] = "99"
-    response.headers["X-RateLimit-Reset"] = str(int(time.time()) + 60)
+    # RFC-Compliant Rate Limit Headers
+    response.headers["X-RateLimit-Limit"] = str(limit)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    response.headers["X-RateLimit-Reset"] = str(int(time.time()) + window)
+    
+    # Observability: Add Trace ID
+    if not request.headers.get("X-Trace-ID"):
+        trace_id = f"{int(time.time())}-{os.urandom(4).hex()}"
+        response.headers["X-Trace-ID"] = trace_id
     
     # Extract details for logging
     endpoint = request.url.path
     method = request.method
-    client_ip = request.client.host if request.client else "0.0.0.0"
     status_code = response.status_code
     
     # Extract cache hit info from context if available
@@ -176,20 +211,14 @@ async def add_response_time(request: Request, call_next):
     
     # Log to ClickHouse asynchronously (non-blocking)
     if endpoint.startswith("/asn"):
-        async def log_to_clickhouse():
-            try:
-                ch_client.execute(
-                    """INSERT INTO api_requests 
-                    (timestamp, endpoint, method, status_code, response_time_ms, cache_hit, client_ip, error_message) 
-                    VALUES""",
-                    [(datetime.now(), endpoint, method, status_code, process_time, 1 if cache_hit else 0, client_ip, error_msg)]
-                )
-            except Exception as e:
-                logger.error(f"Failed to log API request: {e}")
-        
-        # Fire and forget using a thread (since ch_client is sync)
+        # Fire and forget using a thread to avoid blocking the event loop
         loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, lambda: asyncio.run(log_to_clickhouse()) if inspect.iscoroutinefunction(log_to_clickhouse) else log_to_clickhouse())
+        loop.run_in_executor(None, lambda: ch_client.execute(
+            """INSERT INTO api_requests 
+            (timestamp, endpoint, method, status_code, response_time_ms, cache_hit, client_ip, error_message) 
+            VALUES""",
+            [(datetime.now(), endpoint, method, status_code, process_time, 1 if cache_hit else 0, client_ip, error_msg)]
+        ))
 
     return response
 
@@ -206,8 +235,42 @@ def read_root():
 
 @app.get("/health", tags=["System"])
 def health_check():
-    # Simple check, ideally check DB connections
-    return {"status": "healthy"}
+    """
+    **Combined Health Check (FAANG Style)**
+    Returns status of all underlying project dependencies.
+    """
+    health = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "dependencies": {
+            "postgres": "down",
+            "clickhouse": "down",
+            "redis": "down"
+        }
+    }
+    
+    try:
+        # Check Postgres
+        with pg_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+            health["dependencies"]["postgres"] = "up"
+            
+        # Check ClickHouse
+        ch_client.execute("SELECT 1")
+        health["dependencies"]["clickhouse"] = "up"
+        
+        # Check Redis
+        redis_client.ping()
+        health["dependencies"]["redis"] = "up"
+        
+    except Exception as e:
+        health["status"] = "degraded"
+        logger.error(f"Health check failed: {e}")
+        
+    if all(v == "up" for v in health["dependencies"].values()):
+        return health
+    else:
+        return Response(content=json.dumps(health), status_code=503, media_type="application/json")
 
 def generate_penalty_details(result: dict) -> List[PenaltyDetail]:
     """Generate structured explanations for detected risk signals."""
@@ -329,14 +392,23 @@ def get_asn_score(asn: int, response: Response, request: Request, api_key: str =
         
         result = dict(result)
         
-        # Calculate Rank (on the fly request)
-        # Percentile: count(scores < my_score) / total_count * 100
+        # Calculate Rank (Optimized via Caching)
         score = result['total_score']
-        rank_query = text("SELECT count(*) FROM asn_registry WHERE total_score < :score")
-        total_query = text("SELECT count(*) FROM asn_registry")
         
+        # Enterprise Logic: Cache total count for 5 minutes to avoid heavy query
+        cache_key_total = "stats:asn_total_count"
+        try:
+            total_count = redis_client.get(cache_key_total)
+            if total_count:
+                total_count = int(total_count)
+            else:
+                total_count = conn.execute(text("SELECT count(*) FROM asn_registry")).scalar()
+                redis_client.setex(cache_key_total, 300, total_count)
+        except Exception:
+            total_count = conn.execute(text("SELECT count(*) FROM asn_registry")).scalar()
+
+        rank_query = text("SELECT count(*) FROM asn_registry WHERE total_score < :score")
         count_lower = conn.execute(rank_query, {'score': score}).scalar()
-        total_count = conn.execute(total_query).scalar()
         
         percentile = 0.0
         if total_count > 0:
@@ -453,14 +525,6 @@ def add_to_whitelist(req: WhitelistRequest, api_key: str = Depends(get_api_key))
     """
     try:
         with pg_engine.connect() as conn:
-            # Ensure table exists (Lazy Init - matching Scorer logic)
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS asn_whitelist (
-                    asn BIGINT PRIMARY KEY,
-                    reason TEXT,
-                    added_at TIMESTAMP DEFAULT NOW()
-                )
-            """))
             conn.execute(text("""
                 INSERT INTO asn_whitelist (asn, reason) 
                 VALUES (:asn, :reason)
