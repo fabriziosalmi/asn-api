@@ -30,7 +30,7 @@ Evaluates routing best practices and protocol compliance.
 | Route Leaks | -25 | Valley-free routing violations |
 | Bogon Ads | -40 | Advertising reserved/unallocated space |
 | Stub Transit | -20 | Stub ASN acting as transit provider |
-| Zombie ASN | -15 | Registered but silent (0 prefixes) |
+| Inactive ASN | -15 | Registered but silent (0 prefixes) |
 | Space Squatting | -50 | Announcing RIR reserved space |
 
 ## Threat Score (35%)

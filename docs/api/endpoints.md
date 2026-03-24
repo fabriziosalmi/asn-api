@@ -82,7 +82,7 @@ curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169
 
 ## GET /asn/{asn}/upstreams
 
-**Peer Pressure Analysis**: Evaluates the risk of the ASN's upstream providers (who they buy transit from).
+**Upstream Risk Evaluation Analysis**: Evaluates the risk of the ASN's upstream providers (who they buy transit from).
 
 ### Parameters
 

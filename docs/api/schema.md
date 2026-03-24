@@ -104,7 +104,7 @@ interface BulkResult {
 }
 ```
 
-## Peer Pressure
+## Upstream Risk Evaluation
 
 Response object for upstream risk analysis.
 

@@ -64,7 +64,7 @@ Detailed explanation of all response fields and their meanings.
 
 ### downstream_score
 - **Type**: Integer (0-100) or null
-- **Description**: "Cone of Silence" Score. Average risk score of this ASN's top downstream clients.
+- **Description**: "Downstream Risk Algorithm" Score. Average risk score of this ASN's top downstream clients.
 - **Interpretation**: logic "Guilt by association". If you sell to bad actors, your score drops.
 - **Threshold**: <70 triggers a penalty.
 

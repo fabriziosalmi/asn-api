@@ -11,12 +11,12 @@
 The ASN Risk Intelligence Platform is a production-grade system for assessing the security and stability risk of Autonomous Systems (ASNs) on the Internet. By combining real-time BGP routing data, threat intelligence feeds, and sophisticated network topology analysis, it generates comprehensive risk scores (0-100) that help organizations make informed decisions about network trust.
 
 **Key Capabilities:**
-- 🔍 **Real-time BGP Analysis** - Process hundreds of BGP updates per second from RIPE RIS live streams
-- 🛡️ **Multi-source Threat Intelligence** - Integrate Spamhaus, URLhaus, PhishTank, and other feeds
-- 📊 **Advanced Scoring Engine** - 30+ signals across hygiene, threats, stability, and forensics
-- 🔄 **Historical Tracking** - 365-day score history with trend analysis
-- 🌐 **Topology Analysis** - Upstream/downstream risk assessment and peer pressure analysis
-- 📈 **Production-Ready** - Enterprise-grade REST API with caching, rate limiting, and monitoring
+-  **Real-time BGP Analysis** - Process hundreds of BGP updates per second from RIPE RIS live streams
+- ️ **Multi-source Threat Intelligence** - Integrate Spamhaus, URLhaus, PhishTank, and other feeds
+-  **Advanced Scoring Engine** - 30+ signals across hygiene, threats, stability, and forensics
+-  **Historical Tracking** - 365-day score history with trend analysis
+-  **Topology Analysis** - Upstream/downstream risk assessment and peer pressure analysis
+-  **Production-Ready** - Enterprise-grade REST API with caching, rate limiting, and monitoring
 
 ### Current Statistics
 
@@ -78,32 +78,32 @@ BGP Stream --> ingestor --> ClickHouse (History) <-- engine (Worker)
 
 ### Core Capabilities
 
-#### 🎯 Risk Scoring
+####  Risk Scoring
 - **Comprehensive Analysis** - 30+ signals across 4 categories (Hygiene, Threats, Stability, Forensics)
 - **Real-time Scoring** - Sub-500ms scoring latency per ASN
 - **Percentile Ranking** - Global comparative analysis across 1,519+ monitored ASNs
 - **Historical Tracking** - 365-day score history with trend visualization
 
-#### 🔍 Intelligence Sources
+####  Intelligence Sources
 - **BGP Telemetry** - Live RIPE RIS stream processing (100-200 updates/sec)
 - **RPKI Validation** - ROA validation for route origin authentication
 - **Threat Feeds** - Spamhaus DROP/EDROP, URLhaus, PhishTank integration
 - **Network Metadata** - PeeringDB enrichment, WHOIS analysis
 
-#### 🧠 Advanced Analytics
-- **Downstream Risk** - "Cone of Silence" algorithm for customer risk assessment
-- **Upstream Analysis** - "Peer Pressure" evaluation of transit providers
+####  Advanced Analytics
+- **Downstream Risk** - "Downstream Risk Algorithm" algorithm for customer risk assessment
+- **Upstream Analysis** - "Upstream Risk Evaluation" evaluation of transit providers
 - **Zombie Detection** - Identification of inactive/parked ASNs
 - **BGP Forensics** - DDoS sponge detection, AS path prepending analysis
 - **Predictive Stability** - ML-based instability prediction using statistical analysis
 
-#### 🔐 Security Features
+####  Security Features
 - **API Key Authentication** - Secure access control with configurable keys
 - **Rate Limiting** - RFC-compliant rate limit headers (`X-RateLimit-*`)
 - **HTTPS Ready** - Production deployment with TLS/SSL support
 - **Whitelist Management** - User-managed ASN exclusion lists
 
-#### 📊 Monitoring & Observability
+####  Monitoring & Observability
 - **Grafana Dashboards** - 4 pre-built dashboards for monitoring
   - Mission Control: Real-time BGP activity and threat detection
   - System Health: Ingestion rates and database metrics
@@ -134,9 +134,9 @@ curl -X POST -H "X-API-Key: dev-secret" -H "Content-Type: application/json" \
 
 | Component | Weight | Signals |
 |-----------|--------|---------|
-| **Hygiene** (40%) | RPKI validation, route leaks, bogon advertisements, **Zombie ASNs** (0 prefixes) |
+| **Hygiene** (40%) | RPKI validation, route leaks, bogon advertisements, **Inactive ASNs** (0 prefixes) |
 | **Threats** (35%) | Spamhaus listings, botnet C2, phishing, malware, **WHOIS Entropy** |
-| **Stability** (25%) | BGP churn rate, announcement volatility, **Downstream Risk** (Cone of Silence) |
+| **Stability** (25%) | BGP churn rate, announcement volatility, **Downstream Risk** (Downstream Risk Algorithm) |
 | **Forensics** (Bonus)| **DDoS Sponge** (Blackholing), **Traffic Chaos** (Prepending), **Space Squatting** |
 | **Enterprise** (Obs) | RFC-Compliant Rate Limiting (`X-RateLimit`), Forensic Dashboards |
 
@@ -207,14 +207,14 @@ The platform uses a sophisticated multi-factor scoring model that analyzes 30+ s
 
 ### Signal Breakdown
 
-#### 🔧 Routing Hygiene (40%)
+####  Routing Hygiene (40%)
 - **RPKI Validation** - Invalid ROA status detection (-20 points)
 - **Route Leaks** - Valley-free violation detection (-20 points)
 - **Bogon Advertisement** - Reserved/private prefix announcements (-10 points)
 - **Prefix Granularity** - De-aggregation and fragmentation analysis (-10 points)
-- **Zombie ASNs** - Active registration with zero routes (-15 points)
+- **Inactive ASNs** - Active registration with zero routes (-15 points)
 
-#### 🛡️ Threat Intelligence (35%)
+#### ️ Threat Intelligence (35%)
 - **Spamhaus Listings** - DROP/EDROP list membership (-30 points)
 - **Spam Emission** - High spam bot activity rate (-15 points)
 - **Botnet C2 Hosting** - Command & control server presence (-20 per C2, cap at -40)
@@ -223,7 +223,7 @@ The platform uses a sophisticated multi-factor scoring model that analyzes 30+ s
 - **Threat Recidivism** - Persistent malicious activity over 30 days (-10 points)
 - **WHOIS Entropy** - Algorithmically generated organization names (-10 points)
 
-#### ⚖️ Network Stability (25%)
+#### Network Stability (25%)
 - **Upstream Churn** - Frequent provider changes (>2 in 90 days: -25 points)
 - **Route Flapping** - High withdrawal rates (>100/week: -5 points)
 - **Predictive Instability** - ML-based stability forecast (-15 points)
@@ -231,8 +231,8 @@ The platform uses a sophisticated multi-factor scoring model that analyzes 30+ s
 - **Tier-1 Connectivity** - Multiple Tier-1 upstreams (+5 bonus)
 - **Bad Neighborhood** - Low-scoring upstreams (-5 to -15 points)
 
-#### 🔬 Forensic Signals (Bonus/Penalty)
-- **Downstream Risk** - "Cone of Silence" customer analysis (-20 points if avg <70)
+####  Forensic Signals (Bonus/Penalty)
+- **Downstream Risk** - "Downstream Risk Algorithm" customer analysis (-20 points if avg <70)
 - **DDoS Sponge** - Blackhole community tagging frequency (-15 points)
 - **Traffic Engineering Chaos** - Excessive AS path prepending (-10 points)
 - **Space Squatting** - RIR allocation validation

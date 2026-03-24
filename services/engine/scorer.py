@@ -22,11 +22,16 @@ CH_HOST = os.getenv('DB_TS_HOST', 'db-timeseries')
 CH_USER = os.getenv('CLICKHOUSE_USER', 'default')
 CH_PASS = os.getenv('CLICKHOUSE_PASSWORD', '')
 
+import urllib.parse
+PG_PASS_SAFE = urllib.parse.quote_plus(PG_PASS)
+
 class RiskScorer:
     def __init__(self):
-        self.pg_engine = create_engine(f'postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}/{PG_DB}')
+        self.pg_engine = create_engine(f'postgresql://{PG_USER}:{PG_PASS_SAFE}@{PG_HOST}/{PG_DB}')
         self.ch_client = Client(host=CH_HOST, user=CH_USER, password=CH_PASS)
         self.executor = ThreadPoolExecutor(max_workers=5)
+        import threading
+        self._cb_lock = threading.Lock()
         self._cb_state = {'failures': 0, 'last_failure': 0, 'open': False}
 
     def calculate_score(self, asn):
@@ -165,7 +170,7 @@ class RiskScorer:
                 if res:
                     avg_upstream_score = sum(r[0] for r in res) / len(res)
 
-        # 6. [The Oracle] Predictive Stability Analysis
+        # 6. Predictive Statistical Variance Analysis
         query_oracle = """
         SELECT avg(c) as u, stddevPop(c) as s
         FROM (
@@ -222,7 +227,8 @@ class RiskScorer:
         try:
             res = self.ch_client.execute(query, {'asn': asn})
             return res[0][0] if res else 0
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error querying bgp communities for ASN {asn}: {e}")
             return 0
 
     def _analyze_traffic_engineering(self, asn):
@@ -239,7 +245,8 @@ class RiskScorer:
         try:
             res = self.ch_client.execute(query, {'asn': asn})
             return res[0][0] if res and res[0][0] else 0
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error querying traffic engineering for ASN {asn}: {e}")
             return 0
 
     def _analyze_downstreams(self, asn):
@@ -357,12 +364,11 @@ class RiskScorer:
             score -= penalty; breakdown['stability'] -= penalty
             details.append(f"High Upstream Churn ({t['upstream_churn_90d']} providers in 90d)")
             
-        # [The Oracle] Predictive Instability
-        # If the Coefficient of Variation is too high, we predict future trouble
+        # Statistical High Variance prediction
         if t.get('is_predictive_unstable'):
             penalty = 15
             score -= penalty; breakdown['stability'] -= penalty
-            details.append("Predictive AI: High Probability of Instability")
+            details.append("Statistical Analysis: High Probability of Instability")
 
         # Flapping (Instability)
         if t['recent_withdrawals'] > 100:
@@ -514,12 +520,13 @@ class RiskScorer:
 
         def run_enrichment():
             # Check Circuit Breaker
-            if self._cb_state['open']:
-                if time.time() - self._cb_state['last_failure'] > 300: # 5 min cool down
-                    self._cb_state['open'] = False
-                    self._cb_state['failures'] = 0
-                else:
-                    return # Circuit open, skip
+            with self._cb_lock:
+                if self._cb_state['open']:
+                    if time.time() - self._cb_state['last_failure'] > 300: # 5 min cool down
+                        self._cb_state['open'] = False
+                        self._cb_state['failures'] = 0
+                    else:
+                        return # Circuit open, skip
 
             try:
                 # 1. RIPEstat
@@ -545,14 +552,17 @@ class RiskScorer:
                         local_conn.commit()
                 
                 # Success: reset failures
-                self._cb_state['failures'] = 0
+                with self._cb_lock:
+                    self._cb_state['failures'] = 0
 
             except Exception as e:
                 print(f"[Enrichment] Task failed for {asn}: {e}")
-                self._cb_state['failures'] += 1
-                self._cb_state['last_failure'] = time.time()
-                if self._cb_state['failures'] >= 5:
-                    logger.error("[Enrichment] CIRCUIT OPEN: External APIs are failing.")
+                with self._cb_lock:
+                    self._cb_state['failures'] += 1
+                    self._cb_state['last_failure'] = time.time()
+                    if self._cb_state['failures'] >= 5:
+                        self._cb_state['open'] = True
+                        logger.error("[Enrichment] CIRCUIT OPEN: External APIs are failing.")
         
         self.executor.submit(run_enrichment)
 

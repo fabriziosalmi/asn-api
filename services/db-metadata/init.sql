@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS asn_registry (
 );
 
 CREATE TABLE IF NOT EXISTS asn_signals (
-    asn BIGINT REFERENCES asn_registry(asn),
+    asn BIGINT REFERENCES asn_registry(asn) ON DELETE CASCADE,
     
     -- Routing Hygiene (Category A)
     rpki_invalid_percent DECIMAL(5,2),
@@ -58,9 +58,11 @@ CREATE TABLE IF NOT EXISTS asn_signals (
 
 
 CREATE TABLE IF NOT EXISTS asn_whitelist (
-    asn BIGINT PRIMARY KEY REFERENCES asn_registry(asn),
+    asn BIGINT PRIMARY KEY REFERENCES asn_registry(asn) ON DELETE CASCADE,
     reason TEXT,
     added_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 CREATE INDEX idx_asn_score ON asn_registry(total_score);
+CREATE INDEX idx_asn_risk_level ON asn_registry(risk_level);
+CREATE INDEX idx_asn_last_scored_at ON asn_registry(last_scored_at);

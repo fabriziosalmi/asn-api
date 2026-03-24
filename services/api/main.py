@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="ASN Risk API", 
-    version="6.0.0",
+    version="6.1.0",
     description="""
     ## Autonomous System Risk Scoring API
     
@@ -43,10 +43,10 @@ app = FastAPI(
 
 # Security
 API_KEY_NAME = "X-API-Key"
-API_KEY = os.getenv("API_SECRET_KEY", "dev-secret")
+API_KEY = os.getenv("API_SECRET_KEY")
 
-if API_KEY == "dev-secret":
-    logger.warning("! WARNING: Running with DEFAULT API KEY. This is INSECURE for production.")
+if not API_KEY:
+    raise RuntimeError("CRITICAL: API_SECRET_KEY environment variable is missing. Halting execution for security.")
 
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
@@ -64,8 +64,11 @@ CH_HOST = os.getenv('CLICKHOUSE_HOST', 'db-timeseries') # Note: Check docker-com
 CH_USER = os.getenv('CLICKHOUSE_USER', 'default')
 CH_PASS = os.getenv('CLICKHOUSE_PASSWORD', '')
 
+import urllib.parse
+PG_PASS_SAFE = urllib.parse.quote_plus(PG_PASS)
+
 # Ensure connection strings are valid
-pg_engine = create_engine(f'postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}/{PG_DB}')
+pg_engine = create_engine(f'postgresql://{PG_USER}:{PG_PASS_SAFE}@{PG_HOST}/{PG_DB}')
 ch_client = Client(host=CH_HOST, user=CH_USER, password=CH_PASS)
 
 # Redis Cache
@@ -117,8 +120,8 @@ class RiskScoreResponse(BaseModel):
     registry: Optional[str] = None
     risk_score: int
     risk_level: str
-    rank_percentile: Optional[float] = None # Global percentile (0-100)
-    downstream_score: Optional[int] = None # Phase 4 SOTA
+    rank_percentile: Optional[float] = None
+    downstream_score: Optional[int] = None
     last_updated: str
     breakdown: Dict[str, int]
     signals: AllSignals
@@ -164,14 +167,15 @@ async def add_response_time(request: Request, call_next):
     window = 60 # 1 minute
     
     try:
-        current = redis_client.incr(rate_limit_key)
+        loop = asyncio.get_event_loop()
+        current = await loop.run_in_executor(None, redis_client.incr, rate_limit_key)
         if current == 1:
-            redis_client.expire(rate_limit_key, window)
+            await loop.run_in_executor(None, redis_client.expire, rate_limit_key, window)
         
         remaining = max(0, limit - current)
         
         if current > limit:
-            ttl = redis_client.ttl(rate_limit_key)
+            ttl = await loop.run_in_executor(None, redis_client.ttl, rate_limit_key)
             return Response(
                 content=json.dumps({"detail": f"Rate limit exceeded. Try again in {ttl} seconds."}),
                 status_code=429,
@@ -236,7 +240,7 @@ def read_root():
 @app.get("/health", tags=["System"])
 def health_check():
     """
-    **Combined Health Check (FAANG Style)**
+    **Combined Health Check**
     Returns status of all underlying project dependencies.
     """
     health = {
