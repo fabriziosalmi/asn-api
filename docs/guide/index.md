@@ -29,7 +29,7 @@ The platform evaluates each ASN across four categories:
 
 Scores are updated continuously as new data arrives and stored with full history (365 days) for trend analysis.
 
-## Architecture Highlights (v7.2.0)
+## Architecture Highlights (v7.3.0)
 
 - **Async Redis** with atomic Lua-based rate limiting
 - **Pydantic Settings** for validated, fail-fast configuration

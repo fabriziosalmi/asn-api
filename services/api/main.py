@@ -71,7 +71,7 @@ return current
 # --- Constants ---
 ASN_MIN = 1
 ASN_MAX = 4294967295
-API_VERSION = "7.1.0"
+API_VERSION = "7.3.0"
 
 
 # --- Lifespan ---
