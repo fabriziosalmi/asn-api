@@ -244,69 +244,84 @@ class RiskScorer:
     def _apply_scoring_rules(self, s: dict, t: dict) -> tuple[int, dict, list, str]:
         score = 100
         breakdown = {"hygiene": 0, "threat": 0, "stability": 0}
-        details = []
+        details: list[str] = []
+
+        def penalize(cat: str, pts: int, msg: str) -> None:
+            nonlocal score
+            score -= pts
+            breakdown[cat] -= pts
+            details.append(msg)
+
+        def bonus(cat: str, pts: int) -> None:
+            nonlocal score
+            score += pts
+            breakdown[cat] += pts
 
         # --- CATEGORY A: ROUTING HYGIENE ---
         if s.get("rpki_invalid_percent", 0) > 1.0:
-            p = 20; score -= p; breakdown["hygiene"] -= p; details.append("RPKI Invalid > 1%")
+            penalize("hygiene", 20, "RPKI Invalid > 1%")
         if s.get("has_route_leaks"):
-            p = 20; score -= p; breakdown["hygiene"] -= p; details.append("Active Route Leaks detected")
+            penalize("hygiene", 20, "Active Route Leaks detected")
         if s.get("has_bogon_ads"):
-            p = 10; score -= p; breakdown["hygiene"] -= p; details.append("Advertising Bogon Space")
+            penalize("hygiene", 10, "Advertising Bogon Space")
         if s.get("prefix_granularity_score", 0) > 50:
-            p = 10; score -= p; breakdown["hygiene"] -= p; details.append("High Prefix Fragmentation")
+            penalize("hygiene", 10, "High Prefix Fragmentation")
 
         # --- CATEGORY B: THREAT INTEL ---
         if s.get("spamhaus_listed"):
-            p = 30; score -= p; breakdown["threat"] -= p; details.append("Listed on Spamhaus DROP")
+            penalize("threat", 30, "Listed on Spamhaus DROP")
         c2_count = s.get("botnet_c2_count", 0)
         if c2_count > 0:
-            p = min(40, c2_count * 20); score -= p; breakdown["threat"] -= p; details.append(f"Hosting {c2_count} Botnet C2 servers")
+            penalize("threat", min(40, c2_count * 20), f"Hosting {c2_count} Botnet C2 servers")
         if s.get("spam_emission_rate", 0) > 0.1:
-            p = 15; score -= p; breakdown["threat"] -= p; details.append("High Spambot emission rate")
+            penalize("threat", 15, "High Spambot emission rate")
         if t["recent_threat_count"] > 5:
-            p = 10; score -= p; breakdown["threat"] -= p; details.append("Persistent Threat Activity (Recidivism)")
+            penalize("threat", 10, "Persistent Threat Activity (Recidivism)")
 
         # --- CATEGORY C: STABILITY & IDENTITY ---
         if t["upstream_churn_90d"] > 2:
-            p = 25; score -= p; breakdown["stability"] -= p; details.append(f"High Upstream Churn ({t['upstream_churn_90d']} providers in 90d)")
+            penalize("stability", 25, f"High Upstream Churn ({t['upstream_churn_90d']} providers in 90d)")
         if t.get("is_predictive_unstable"):
-            p = 15; score -= p; breakdown["stability"] -= p; details.append("Statistical Analysis: High Probability of Instability")
+            penalize("stability", 15, "Statistical Analysis: High Probability of Instability")
         if t["recent_withdrawals"] > 100:
-            p = 5; score -= p; breakdown["stability"] -= p; details.append("Significant Route Flapping")
+            penalize("stability", 5, "Significant Route Flapping")
         if s.get("has_peeringdb_profile"):
-            score += 5; breakdown["stability"] += 5
+            bonus("stability", 5)
         if s.get("upstream_tier1_count", 0) > 1:
-            score += 5; breakdown["stability"] += 5
+            bonus("stability", 5)
 
         # --- CATEGORY D: CONNECTIVITY RISK ---
         avg_upstream = t.get("avg_upstream_score", 100)
         if avg_upstream < 50:
-            p = 15; score -= p; breakdown["stability"] -= p; details.append(f"Bad Neighborhood (Avg Upstream Score: {int(avg_upstream)})")
+            penalize("stability", 15, f"Bad Neighborhood (Avg Upstream Score: {int(avg_upstream)})")
         elif avg_upstream < 70:
-            p = 5; score -= p; details.append("Suspicious Upstreams")
+            penalize("stability", 5, "Suspicious Upstreams")
 
         # --- PHASE 4: SOTA INTELLIGENCE ---
         downstream_score = t.get("downstream_score", 100)
         if downstream_score < 70:
-            p = 20; score -= p; breakdown["stability"] -= p; details.append(f"Toxic Downstream Clientele (Avg Score: {int(downstream_score)})")
+            penalize("stability", 20, f"Toxic Downstream Clientele (Avg Score: {int(downstream_score)})")
         if t.get("zombie_status"):
-            p = 15; score -= p; breakdown["hygiene"] -= p; details.append("Zombie ASN: Active Registration but Zero Routes")
+            penalize("hygiene", 15, "Zombie ASN: Active Registration but Zero Routes")
         entropy = s.get("whois_entropy", 0.0)
         if entropy > 4.5:
-            p = 10; score -= p; breakdown["threat"] -= p; details.append(f"High WHOIS Entropy ({entropy:.2f}): Possible generated name")
+            penalize("threat", 10, f"High WHOIS Entropy ({entropy:.2f}): Possible generated name")
 
         # --- PHASE 5: BGP FORENSICS ---
         if t.get("ddos_blackhole_count", 0) > 5:
-            p = 15; score -= p; breakdown["stability"] -= p; details.append("DDoS Sponge: Frequent Blackholing detected")
+            penalize("stability", 15, "DDoS Sponge: Frequent Blackholing detected")
         if t.get("excessive_prepending_count", 0) > 10:
-            p = 10; score -= p; breakdown["stability"] -= p; details.append("Traffic Engineering Chaos: Excessive BGP Prepending")
+            penalize("stability", 10, "Traffic Engineering Chaos: Excessive BGP Prepending")
 
         final_score = max(0, min(100, score))
-        if final_score >= 90: risk_level = "LOW"
-        elif final_score >= 70: risk_level = "MEDIUM"
-        elif final_score >= 50: risk_level = "HIGH"
-        else: risk_level = "CRITICAL"
+        if final_score >= 90:
+            risk_level = "LOW"
+        elif final_score >= 70:
+            risk_level = "MEDIUM"
+        elif final_score >= 50:
+            risk_level = "HIGH"
+        else:
+            risk_level = "CRITICAL"
 
         return final_score, breakdown, details, risk_level
 

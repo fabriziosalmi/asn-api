@@ -1,7 +1,6 @@
 # Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
 
 import requests
-import time
 
 API_URL = "http://localhost:8000"
 API_KEY = "dev-secret"
@@ -64,7 +63,7 @@ def test_peer_pressure():
         r = requests.get(f"{API_URL}/asn/{asn}/upstreams", headers=HEADERS)
         if r.status_code == 200:
             data = r.json()
-            print(f"✅ Peer Pressure Endpoint reachable")
+            print("✅ Peer Pressure Endpoint reachable")
             print(f"ASN: {data['asn']}, Avg Upstream Score: {data['avg_upstream_score']}")
             if 'upstreams' in data:
                 print(f"✅ Found {len(data['upstreams'])} upstreams")

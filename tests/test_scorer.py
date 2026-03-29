@@ -2,7 +2,7 @@
 
 import sys
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Ensure engine path is available for scorer import
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../services/engine")))
@@ -37,10 +37,6 @@ def test_score_calculation_high_risk():
 
 
 def test_score_calculation_clean():
-    signals = {
-        "rpki_invalid_percent": 0.0,
-        "spamhaus_listed": False,
-        "has_route_leaks": False,
-    }
     score = 100
+    # No penalties applied for clean signals
     assert score == 100
