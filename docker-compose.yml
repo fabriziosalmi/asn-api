@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # ------------------------------------------------------------------
   # 1. DATA STORAGE LAYER
@@ -91,15 +89,12 @@ services:
       db-timeseries:
         condition: service_healthy
     environment:
-      - BROKER_URL=redis://${REDIS_HOST}:6379/0
-      - CLICKHOUSE_HOST=${CLICKHOUSE_HOST}
+      - BROKER_URL=redis://broker-cache:6379/0
+      - DB_TS_HOST=db-timeseries
       - CLICKHOUSE_USER=${CLICKHOUSE_USER}
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
-      - CLICKHOUSE_DB=${CLICKHOUSE_DB}
-      - PYTHONUNBUFFERED=1 # Ensure logs appear immediately
-
-      # Real data volume control
-      - RIPE_RIS_ENABLED=true 
+      - PYTHONUNBUFFERED=1
+      - RIPE_RIS_ENABLED=true
     networks:
       - asn_backend
       - asn_public
@@ -124,11 +119,10 @@ services:
         condition: service_healthy
     environment:
       - DB_META_HOST=db-metadata
-      - DB_TS_HOST=${CLICKHOUSE_HOST}
+      - DB_TS_HOST=db-timeseries
       - CLICKHOUSE_USER=${CLICKHOUSE_USER}
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
-      - CLICKHOUSE_DB=${CLICKHOUSE_DB}
-      - BROKER_URL=redis://${REDIS_HOST}:6379/0
+      - BROKER_URL=redis://broker-cache:6379/0
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
@@ -157,15 +151,18 @@ services:
       broker-cache:
         condition: service_healthy
     environment:
-      - DB_HOST=db-metadata
-      - REDIS_HOST=${REDIS_HOST}
+      - DB_META_HOST=db-metadata
+      - DB_TS_HOST=db-timeseries
+      - REDIS_HOST=broker-cache
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
-      - CLICKHOUSE_HOST=${CLICKHOUSE_HOST}
       - CLICKHOUSE_USER=${CLICKHOUSE_USER}
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
-      - CLICKHOUSE_DB=${CLICKHOUSE_DB}
+      - API_SECRET_KEY=${API_SECRET_KEY}
+      - CACHE_TTL=${CACHE_TTL:-60}
+      - API_RATE_LIMIT=${API_RATE_LIMIT:-100}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
     networks:
       - asn_backend
       - asn_public

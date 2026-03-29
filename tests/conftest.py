@@ -1,47 +1,59 @@
 # Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
 
 import pytest
-from starlette.testclient import TestClient
 import sys
 import os
+from unittest.mock import MagicMock, patch, AsyncMock
+
+# Set required env vars before importing app
+os.environ.setdefault("API_SECRET_KEY", "test-secret-key")
+os.environ.setdefault("POSTGRES_USER", "test_user")
+os.environ.setdefault("POSTGRES_PASSWORD", "test_pass")
+os.environ.setdefault("POSTGRES_DB", "test_db")
+os.environ.setdefault("DB_META_HOST", "localhost")
+os.environ.setdefault("DB_TS_HOST", "localhost")
+os.environ.setdefault("REDIS_HOST", "localhost")
 
 # Add services to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '../services'))
-
-from api.main import app
-
-from unittest.mock import MagicMock, patch
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../services"))
 
 # Mock dependencies before importing app (since it connects on import)
-with patch('redis.Redis'), patch('sqlalchemy.create_engine'), patch('clickhouse_driver.Client'):
+with patch("redis.asyncio.Redis"), \
+     patch("sqlalchemy.create_engine"), \
+     patch("clickhouse_driver.Client"):
     from api.main import app
+
 
 @pytest.fixture(autouse=True)
 def mock_dependencies():
-    # Patch the actual instances in api.main
-    with patch('api.main.redis_client') as mock_redis, \
-         patch('api.main.pg_engine') as mock_pg, \
-         patch('api.main.ch_client') as mock_ch:
-        
-        # Configure mocks to return success status for health checks
-        mock_redis.ping.return_value = True
-        mock_redis.incr.return_value = 1
-        
-        # Mock result of 'SELECT 1' for Postgres
-        mock_pg_conn = MagicMock()
-        mock_pg.connect.return_value.__enter__.return_value = mock_pg_conn
-        mock_pg_conn.execute.return_value = MagicMock()
-        
-        # Mock ClickHouse execute
-        mock_ch.execute.return_value = MagicMock()
-        
+    mock_redis = AsyncMock()
+    mock_redis.get = AsyncMock(return_value=None)
+    mock_redis.setex = AsyncMock(return_value=True)
+    mock_redis.eval = AsyncMock(return_value=1)
+    mock_redis.ttl = AsyncMock(return_value=60)
+
+    mock_pg = MagicMock()
+    mock_pg_conn = MagicMock()
+    mock_pg.connect.return_value.__enter__ = MagicMock(return_value=mock_pg_conn)
+    mock_pg.connect.return_value.__exit__ = MagicMock(return_value=False)
+    mock_pg_conn.execute.return_value = MagicMock()
+
+    mock_ch = MagicMock()
+    mock_ch.execute.return_value = MagicMock()
+
+    with patch("api.main.redis_client", mock_redis), \
+         patch("api.main.pg_engine", mock_pg), \
+         patch("api.main.ch_client", mock_ch):
         yield (mock_redis, mock_pg, mock_ch)
+
 
 @pytest.fixture
 def client():
-    # Re-import to ensure mocked state? No, TestClient takes app.
+    from starlette.testclient import TestClient
+
     return TestClient(app)
+
 
 @pytest.fixture
 def api_key():
-    return "dev-secret"
+    return "test-secret-key"

@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS asn_whitelist (
     added_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX idx_asn_score ON asn_registry(total_score);
-CREATE INDEX idx_asn_risk_level ON asn_registry(risk_level);
-CREATE INDEX idx_asn_last_scored_at ON asn_registry(last_scored_at);
+CREATE INDEX IF NOT EXISTS idx_asn_score ON asn_registry(total_score);
+CREATE INDEX IF NOT EXISTS idx_asn_risk_level ON asn_registry(risk_level);
+CREATE INDEX IF NOT EXISTS idx_asn_last_scored_at ON asn_registry(last_scored_at);
+
+-- Signal lookups (used in LEFT JOIN from API and whitelist checks)
+CREATE INDEX IF NOT EXISTS idx_signals_asn ON asn_signals(asn);
+CREATE INDEX IF NOT EXISTS idx_whitelist_asn ON asn_whitelist(asn);

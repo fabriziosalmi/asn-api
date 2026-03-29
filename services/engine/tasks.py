@@ -1,17 +1,25 @@
 # Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
 
-from celery import Celery
 import os
+import logging
+
+from celery import Celery
 from scorer import RiskScorer
 
-broker_url = os.getenv('BROKER_URL', 'redis://broker-cache:6379/0')
-app = Celery('tasks', broker=broker_url)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger("engine.tasks")
 
-# Instantiate scorer once (conn pool handling handled by SQLAlchemy)
+broker_url = os.getenv("BROKER_URL", "redis://broker-cache:6379/0")
+app = Celery("tasks", broker=broker_url)
+
 scorer = RiskScorer()
 
+
 @app.task
-def calculate_asn_score(asn):
+def calculate_asn_score(asn: int) -> int:
     """
     Celery task to recalculate the risk score for a given ASN.
     Triggered by:
@@ -19,10 +27,9 @@ def calculate_asn_score(asn):
     - Event (new threat detected for specific ASN)
     """
     try:
-        print(f"[Task] Received scoring request for ASN {asn}")
+        logger.info("task_received asn=%s", asn)
         final_score = scorer.calculate_score(asn)
         return final_score
     except Exception as e:
-        print(f"[Task] Error calculating score for ASN {asn}: {e}")
-        raise e
-
+        logger.error("task_failed asn=%s error=%s", asn, e)
+        raise

@@ -1,33 +1,73 @@
 # Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
 
-def test_read_main(client):
+
+def test_health_check(client):
     response = client.get("/health")
+    assert response.status_code in [200, 503]
+    body = response.json()
+    assert "status" in body
+    assert "dependencies" in body
+
+
+def test_root_endpoint(client):
+    response = client.get("/")
     assert response.status_code == 200
-    assert response.json()["status"] == "healthy"
-    assert "dependencies" in response.json()
+    body = response.json()
+    assert body["service"] == "asn-api"
+    assert "version" in body
+
 
 def test_get_asn_score_no_auth(client):
+    response = client.get("/v1/asn/1234")
+    assert response.status_code == 403
+
+
+def test_get_asn_score_no_auth_compat(client):
     response = client.get("/asn/1234")
-    assert response.status_code == 403 # Unauthorized
+    assert response.status_code == 403
+
+
+def test_invalid_asn_range(client, api_key):
+    headers = {"X-API-Key": api_key}
+    response = client.get("/v1/asn/0", headers=headers)
+    assert response.status_code == 400
+
+
+def test_invalid_asn_too_large(client, api_key):
+    headers = {"X-API-Key": api_key}
+    response = client.get("/v1/asn/4294967296", headers=headers)
+    assert response.status_code == 400
+
 
 def test_get_asn_score_not_found(client, api_key):
-    # Mocking DB response is hard in integration without spinning up DB.
-    # For now, we expect 404 or 500 depending on DB connection state in test env.
-    # We assume test env has no DB, so likely 500 or connection error, OR 404 if we mock.
-    # This is a skeleton for when DB is mockable.
     headers = {"X-API-Key": api_key}
     try:
-        response = client.get("/asn/999999", headers=headers)
-        assert response.status_code in [404, 500] 
+        response = client.get("/v1/asn/999999", headers=headers)
+        assert response.status_code in [404, 500]
     except Exception:
-        pass # Expected if DB missing
+        pass
 
-def test_peer_pressure_structure(client, api_key):
+
+def test_peer_pressure_route_exists(client, api_key):
     headers = {"X-API-Key": api_key}
-    # This might fail without DB, but checks route existence
     try:
-        response = client.get("/asn/3333/upstreams", headers=headers)
-        # Just check it doesn't 404
+        response = client.get("/v1/asn/3333/upstreams", headers=headers)
         assert response.status_code != 404
     except Exception:
         pass
+
+
+def test_bulk_check_too_many(client, api_key):
+    headers = {"X-API-Key": api_key}
+    response = client.post(
+        "/v1/tools/bulk-risk-check",
+        headers=headers,
+        json={"asns": list(range(1001))},
+    )
+    assert response.status_code in [400, 422]
+
+
+def test_rate_limit_headers_present(client):
+    response = client.get("/health")
+    assert "X-RateLimit-Limit" in response.headers
+    assert "X-Trace-ID" in response.headers

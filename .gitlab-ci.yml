@@ -1,10 +1,11 @@
 stages:
   - lint
   - test
+  - security
   - build
 
 variables:
-  DOCKER_DRIVER: overlay2  
+  DOCKER_DRIVER: overlay2
   POSTGRES_DB: asn_db
   POSTGRES_USER: runner
   POSTGRES_PASSWORD: runner_password
@@ -15,7 +16,7 @@ services:
 
 linting:
   stage: lint
-  image: python:3.9-slim
+  image: python:3.11-slim
   script:
     - pip install ruff black
     - ruff check .
@@ -23,16 +24,25 @@ linting:
 
 unit_tests:
   stage: test
-  image: python:3.9
+  image: python:3.11
   variables:
-    # Service Access
-    DB_HOST: postgres
+    DB_META_HOST: postgres
     REDIS_HOST: redis
   before_script:
     - pip install -r services/api/requirements.txt
     - pip install pytest pytest-asyncio httpx
   script:
     - pytest tests/ -v
+
+dep_audit:
+  stage: security
+  image: python:3.11-slim
+  script:
+    - pip install pip-audit
+    - pip-audit -r services/api/requirements.txt
+    - pip-audit -r services/engine/requirements.txt
+    - pip-audit -r services/ingestor/requirements.txt
+  allow_failure: true
 
 build_api:
   stage: build
