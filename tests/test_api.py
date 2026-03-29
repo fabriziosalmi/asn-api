@@ -92,7 +92,9 @@ def test_history_pagination_params(client, api_key):
     """History endpoint accepts pagination parameters."""
     headers = {"X-API-Key": api_key}
     try:
-        response = client.get("/v1/asn/15169/history?days=7&offset=0&limit=10", headers=headers)
+        response = client.get(
+            "/v1/asn/15169/history?days=7&offset=0&limit=10", headers=headers
+        )
         # Should not 404 - route exists with pagination params
         assert response.status_code != 404
     except Exception:

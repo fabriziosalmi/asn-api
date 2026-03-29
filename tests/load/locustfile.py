@@ -15,7 +15,6 @@ import random
 
 from locust import HttpUser, task, between, tag
 
-
 API_KEY = os.getenv("API_KEY", "dev-secret")
 HEADERS = {"X-API-Key": API_KEY}
 

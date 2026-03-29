@@ -49,7 +49,9 @@ class RiskScorer:
             user=settings.clickhouse_user,
             password=settings.clickhouse_password,
         )
-        self.redis_client = redis.Redis.from_url(settings.broker_url, decode_responses=True)
+        self.redis_client = redis.Redis.from_url(
+            settings.broker_url, decode_responses=True
+        )
         self.executor = ThreadPoolExecutor(max_workers=5)
         self._cb_lock = threading.Lock()
         self._cb_state = {"failures": 0, "last_failure": 0, "open": False}
@@ -61,12 +63,16 @@ class RiskScorer:
 
         if self._check_whitelist(asn):
             logger.info("scoring_skip", extra={**extra, "reason": "whitelisted"})
-            self._save_score(asn, 100, {"hygiene": 0, "threat": 0, "stability": 0}, "LOW")
+            self._save_score(
+                asn, 100, {"hygiene": 0, "threat": 0, "stability": 0}, "LOW"
+            )
             return 100
 
         signals = self._get_or_create_signals(asn)
         temporal_metrics = self._calculate_temporal_metrics(asn)
-        final_score, breakdown, details, risk_level = self._apply_scoring_rules(signals, temporal_metrics)
+        final_score, breakdown, details, risk_level = self._apply_scoring_rules(
+            signals, temporal_metrics
+        )
         self._save_score(asn, final_score, breakdown, risk_level, temporal_metrics)
 
         # Invalidate API cache for this ASN
@@ -79,7 +85,9 @@ class RiskScorer:
         try:
             self.redis_client.delete(f"score:v3:{asn}")
         except Exception as e:
-            logger.warning("cache_invalidation_failed", extra={"asn": asn, "error": str(e)})
+            logger.warning(
+                "cache_invalidation_failed", extra={"asn": asn, "error": str(e)}
+            )
 
     def _get_or_create_signals(self, asn: int) -> dict:
         query = text("SELECT * FROM asn_signals WHERE asn = :asn")
@@ -89,7 +97,9 @@ class RiskScorer:
 
             if not result:
                 conn.execute(
-                    text("INSERT INTO asn_registry (asn, total_score) VALUES (:asn, 100) ON CONFLICT DO NOTHING"),
+                    text(
+                        "INSERT INTO asn_registry (asn, total_score) VALUES (:asn, 100) ON CONFLICT DO NOTHING"
+                    ),
                     {"asn": asn},
                 )
                 conn.execute(
@@ -113,18 +123,29 @@ class RiskScorer:
                 )
                 conn.commit()
                 return {
-                    "rpki_invalid_percent": 0.0, "rpki_unknown_percent": 0.0,
-                    "has_route_leaks": False, "has_bogon_ads": False, "prefix_granularity_score": 0,
-                    "is_stub_but_transit": False, "spamhaus_listed": False, "spam_emission_rate": 0.0,
-                    "botnet_c2_count": 0, "phishing_hosting_count": 0, "malware_distribution_count": 0,
-                    "has_peeringdb_profile": True, "upstream_tier1_count": 1, "is_whois_private": False,
+                    "rpki_invalid_percent": 0.0,
+                    "rpki_unknown_percent": 0.0,
+                    "has_route_leaks": False,
+                    "has_bogon_ads": False,
+                    "prefix_granularity_score": 0,
+                    "is_stub_but_transit": False,
+                    "spamhaus_listed": False,
+                    "spam_emission_rate": 0.0,
+                    "botnet_c2_count": 0,
+                    "phishing_hosting_count": 0,
+                    "malware_distribution_count": 0,
+                    "has_peeringdb_profile": True,
+                    "upstream_tier1_count": 1,
+                    "is_whois_private": False,
                 }
             return result
 
     def _check_whitelist(self, asn: int) -> bool:
         try:
             with self.pg_engine.connect() as conn:
-                res = conn.execute(text("SELECT asn FROM asn_whitelist WHERE asn = :asn"), {"asn": asn}).fetchone()
+                res = conn.execute(
+                    text("SELECT asn FROM asn_whitelist WHERE asn = :asn"), {"asn": asn}
+                ).fetchone()
                 return res is not None
         except Exception as e:
             logger.error("whitelist_check_failed", extra={"asn": asn, "error": str(e)})
@@ -238,7 +259,10 @@ class RiskScorer:
     def _calculate_whois_entropy(self, input_text: Optional[str]) -> float:
         if not input_text:
             return 0.0
-        prob = [float(input_text.count(c)) / len(input_text) for c in dict.fromkeys(list(input_text))]
+        prob = [
+            float(input_text.count(c)) / len(input_text)
+            for c in dict.fromkeys(list(input_text))
+        ]
         return -sum(p * math.log(p) / math.log(2.0) for p in prob)
 
     def _apply_scoring_rules(self, s: dict, t: dict) -> tuple[int, dict, list, str]:
@@ -272,7 +296,11 @@ class RiskScorer:
             penalize("threat", 30, "Listed on Spamhaus DROP")
         c2_count = s.get("botnet_c2_count", 0)
         if c2_count > 0:
-            penalize("threat", min(40, c2_count * 20), f"Hosting {c2_count} Botnet C2 servers")
+            penalize(
+                "threat",
+                min(40, c2_count * 20),
+                f"Hosting {c2_count} Botnet C2 servers",
+            )
         if s.get("spam_emission_rate", 0) > 0.1:
             penalize("threat", 15, "High Spambot emission rate")
         if t["recent_threat_count"] > 5:
@@ -280,9 +308,15 @@ class RiskScorer:
 
         # --- CATEGORY C: STABILITY & IDENTITY ---
         if t["upstream_churn_90d"] > 2:
-            penalize("stability", 25, f"High Upstream Churn ({t['upstream_churn_90d']} providers in 90d)")
+            penalize(
+                "stability",
+                25,
+                f"High Upstream Churn ({t['upstream_churn_90d']} providers in 90d)",
+            )
         if t.get("is_predictive_unstable"):
-            penalize("stability", 15, "Statistical Analysis: High Probability of Instability")
+            penalize(
+                "stability", 15, "Statistical Analysis: High Probability of Instability"
+            )
         if t["recent_withdrawals"] > 100:
             penalize("stability", 5, "Significant Route Flapping")
         if s.get("has_peeringdb_profile"):
@@ -293,25 +327,39 @@ class RiskScorer:
         # --- CATEGORY D: CONNECTIVITY RISK ---
         avg_upstream = t.get("avg_upstream_score", 100)
         if avg_upstream < 50:
-            penalize("stability", 15, f"Bad Neighborhood (Avg Upstream Score: {int(avg_upstream)})")
+            penalize(
+                "stability",
+                15,
+                f"Bad Neighborhood (Avg Upstream Score: {int(avg_upstream)})",
+            )
         elif avg_upstream < 70:
             penalize("stability", 5, "Suspicious Upstreams")
 
         # --- PHASE 4: SOTA INTELLIGENCE ---
         downstream_score = t.get("downstream_score", 100)
         if downstream_score < 70:
-            penalize("stability", 20, f"Toxic Downstream Clientele (Avg Score: {int(downstream_score)})")
+            penalize(
+                "stability",
+                20,
+                f"Toxic Downstream Clientele (Avg Score: {int(downstream_score)})",
+            )
         if t.get("zombie_status"):
             penalize("hygiene", 15, "Zombie ASN: Active Registration but Zero Routes")
         entropy = s.get("whois_entropy", 0.0)
         if entropy > 4.5:
-            penalize("threat", 10, f"High WHOIS Entropy ({entropy:.2f}): Possible generated name")
+            penalize(
+                "threat",
+                10,
+                f"High WHOIS Entropy ({entropy:.2f}): Possible generated name",
+            )
 
         # --- PHASE 5: BGP FORENSICS ---
         if t.get("ddos_blackhole_count", 0) > 5:
             penalize("stability", 15, "DDoS Sponge: Frequent Blackholing detected")
         if t.get("excessive_prepending_count", 0) > 10:
-            penalize("stability", 10, "Traffic Engineering Chaos: Excessive BGP Prepending")
+            penalize(
+                "stability", 10, "Traffic Engineering Chaos: Excessive BGP Prepending"
+            )
 
         final_score = max(0, min(100, score))
         if final_score >= 90:
@@ -325,7 +373,14 @@ class RiskScorer:
 
         return final_score, breakdown, details, risk_level
 
-    def _save_score(self, asn: int, score: int, breakdown: dict, risk_level: str, metrics: Optional[dict] = None) -> None:
+    def _save_score(
+        self,
+        asn: int,
+        score: int,
+        breakdown: dict,
+        risk_level: str,
+        metrics: Optional[dict] = None,
+    ) -> None:
         timestamp = datetime.now()
         downstream_score = 100
         is_zombie = False
@@ -339,20 +394,38 @@ class RiskScorer:
             excessive_prepend = metrics.get("excessive_prepending_count", 0)
 
         with self.pg_engine.connect() as conn:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 UPDATE asn_registry
                 SET total_score = :score, hygiene_score = 100 + :h, threat_score = 100 + :t,
                     stability_score = 100 + :s, risk_level = :risk_level,
                     downstream_score = :ds, last_scored_at = :now
                 WHERE asn = :asn
-            """), {"score": score, "h": breakdown["hygiene"], "t": breakdown["threat"],
-                   "s": breakdown["stability"], "risk_level": risk_level,
-                   "ds": downstream_score, "now": timestamp, "asn": asn})
-            conn.execute(text("""
+            """),
+                {
+                    "score": score,
+                    "h": breakdown["hygiene"],
+                    "t": breakdown["threat"],
+                    "s": breakdown["stability"],
+                    "risk_level": risk_level,
+                    "ds": downstream_score,
+                    "now": timestamp,
+                    "asn": asn,
+                },
+            )
+            conn.execute(
+                text("""
                 UPDATE asn_signals
                 SET is_zombie_asn = :zombie, ddos_blackhole_count = :bh, excessive_prepending_count = :ep
                 WHERE asn = :asn
-            """), {"zombie": is_zombie, "bh": ddos_bh, "ep": excessive_prepend, "asn": asn})
+            """),
+                {
+                    "zombie": is_zombie,
+                    "bh": ddos_bh,
+                    "ep": excessive_prepend,
+                    "asn": asn,
+                },
+            )
             conn.commit()
 
         try:
@@ -363,13 +436,18 @@ class RiskScorer:
         except Exception as e:
             logger.error("history_log_failed", extra={"asn": asn, "error": str(e)})
 
-        logger.info("scoring_complete", extra={"asn": asn, "score": score, "level": risk_level})
+        logger.info(
+            "scoring_complete", extra={"asn": asn, "score": score, "level": risk_level}
+        )
 
     def _enrich_asn_metadata(self, asn: int, conn) -> None:
         def run_enrichment():
             with self._cb_lock:
                 if self._cb_state["open"]:
-                    if time.time() - self._cb_state["last_failure"] > settings.circuit_breaker_cooldown:
+                    if (
+                        time.time() - self._cb_state["last_failure"]
+                        > settings.circuit_breaker_cooldown
+                    ):
                         self._cb_state["open"] = False
                         self._cb_state["failures"] = 0
                     else:
@@ -382,18 +460,30 @@ class RiskScorer:
                     data = resp.json().get("data", {})
                     holder = data.get("holder", "Unknown")
                     with self.pg_engine.connect() as local_conn:
-                        local_conn.execute(text("UPDATE asn_registry SET name = :name WHERE asn = :asn"), {"name": holder, "asn": asn})
+                        local_conn.execute(
+                            text(
+                                "UPDATE asn_registry SET name = :name WHERE asn = :asn"
+                            ),
+                            {"name": holder, "asn": asn},
+                        )
                         local_conn.commit()
                 else:
                     raise Exception(f"RIPE error: {resp.status_code}")
 
                 pdb_url = f"https://www.peeringdb.com/api/net?asn={asn}"
-                pdb_resp = http_requests.get(pdb_url, timeout=settings.enrichment_timeout)
+                pdb_resp = http_requests.get(
+                    pdb_url, timeout=settings.enrichment_timeout
+                )
                 if pdb_resp.status_code == 200:
                     data = pdb_resp.json().get("data", [])
                     has_pdb = len(data) > 0
                     with self.pg_engine.connect() as local_conn:
-                        local_conn.execute(text("UPDATE asn_signals SET has_peeringdb_profile = :pdb WHERE asn = :asn"), {"pdb": has_pdb, "asn": asn})
+                        local_conn.execute(
+                            text(
+                                "UPDATE asn_signals SET has_peeringdb_profile = :pdb WHERE asn = :asn"
+                            ),
+                            {"pdb": has_pdb, "asn": asn},
+                        )
                         local_conn.commit()
 
                 with self._cb_lock:
@@ -406,6 +496,9 @@ class RiskScorer:
                     self._cb_state["last_failure"] = time.time()
                     if self._cb_state["failures"] >= settings.circuit_breaker_threshold:
                         self._cb_state["open"] = True
-                        logger.error("circuit_breaker_open", extra={"reason": "external_api_failures"})
+                        logger.error(
+                            "circuit_breaker_open",
+                            extra={"reason": "external_api_failures"},
+                        )
 
         self.executor.submit(run_enrichment)

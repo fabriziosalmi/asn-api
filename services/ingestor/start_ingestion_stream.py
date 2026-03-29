@@ -79,9 +79,7 @@ class DataIngestor:
                             last_flush = time.time()
 
             except Exception as e:
-                logger.warning(
-                    "ris_connection_error error=%s backoff=%ss", e, backoff
-                )
+                logger.warning("ris_connection_error error=%s backoff=%ss", e, backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(60, backoff * 2)
 
@@ -400,7 +398,19 @@ class DataIngestor:
         logger.info("guard_start")
 
         TIER_1_ASNS = {
-            3356, 1299, 174, 2914, 3257, 6453, 3491, 701, 1239, 7018, 6461, 5511, 3549
+            3356,
+            1299,
+            174,
+            2914,
+            3257,
+            6453,
+            3491,
+            701,
+            1239,
+            7018,
+            6461,
+            5511,
+            3549,
         }
 
         while self.running:
@@ -423,7 +433,9 @@ class DataIngestor:
 
                             if cidr <= 10 and asn not in TIER_1_ASNS:
                                 description = f"Route Leak Risk: Non-Tier1 ASN {asn} announced huge block {prefix}."
-                                logger.warning("route_leak asn=%s prefix=%s", asn, prefix)
+                                logger.warning(
+                                    "route_leak asn=%s prefix=%s", asn, prefix
+                                )
 
                                 threat_event = [
                                     {

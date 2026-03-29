@@ -18,7 +18,9 @@ PG_PASS = urllib.parse.quote_plus(os.getenv("POSTGRES_PASSWORD", ""))
 PG_HOST = os.getenv("DB_META_HOST", "db-metadata")
 PG_DB = os.getenv("POSTGRES_DB", "asn_registry")
 
-config.set_main_option("sqlalchemy.url", f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}/{PG_DB}")
+config.set_main_option(
+    "sqlalchemy.url", f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}/{PG_DB}"
+)
 
 target_metadata = None
 

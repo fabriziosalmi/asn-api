@@ -4,6 +4,7 @@ Revision ID: 001_baseline
 Revises:
 Create Date: 2026-03-29
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -33,13 +34,20 @@ def upgrade() -> None:
         sa.Column("downstream_score", sa.Integer, server_default="100"),
         sa.Column("whois_entropy_score", sa.Numeric(5, 2), server_default="0.0"),
         sa.Column("risk_level", sa.String(20), server_default="'UNKNOWN'"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()")),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()")
+        ),
         sa.Column("last_scored_at", sa.DateTime(timezone=True)),
     )
 
     op.create_table(
         "asn_signals",
-        sa.Column("asn", sa.BigInteger, sa.ForeignKey("asn_registry.asn", ondelete="CASCADE"), primary_key=True),
+        sa.Column(
+            "asn",
+            sa.BigInteger,
+            sa.ForeignKey("asn_registry.asn", ondelete="CASCADE"),
+            primary_key=True,
+        ),
         sa.Column("rpki_invalid_percent", sa.Numeric(5, 2)),
         sa.Column("rpki_unknown_percent", sa.Numeric(5, 2)),
         sa.Column("has_route_leaks", sa.Boolean, server_default="false"),
@@ -58,14 +66,23 @@ def upgrade() -> None:
         sa.Column("whois_entropy", sa.Numeric(5, 2), server_default="0.0"),
         sa.Column("ddos_blackhole_count", sa.Integer, server_default="0"),
         sa.Column("excessive_prepending_count", sa.Integer, server_default="0"),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()")),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()")
+        ),
     )
 
     op.create_table(
         "asn_whitelist",
-        sa.Column("asn", sa.BigInteger, sa.ForeignKey("asn_registry.asn", ondelete="CASCADE"), primary_key=True),
+        sa.Column(
+            "asn",
+            sa.BigInteger,
+            sa.ForeignKey("asn_registry.asn", ondelete="CASCADE"),
+            primary_key=True,
+        ),
         sa.Column("reason", sa.Text),
-        sa.Column("added_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()")),
+        sa.Column(
+            "added_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()")
+        ),
     )
 
     op.create_index("idx_asn_score", "asn_registry", ["total_score"])

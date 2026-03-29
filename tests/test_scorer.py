@@ -5,12 +5,14 @@ import os
 from unittest.mock import patch
 
 # Ensure engine path is available for scorer import
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../services/engine")))
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../services/engine"))
+)
 
 # Mock DB connections before importing scorer
-with patch("sqlalchemy.create_engine"), \
-     patch("clickhouse_driver.Client"), \
-     patch("redis.Redis"):
+with patch("sqlalchemy.create_engine"), patch("clickhouse_driver.Client"), patch(
+    "redis.Redis"
+):
     from scorer import RiskScorer
 
 

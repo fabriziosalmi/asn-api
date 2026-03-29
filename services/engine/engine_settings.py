@@ -19,7 +19,9 @@ class EngineSettings(BaseSettings):
     clickhouse_password: str = Field(default="", description="ClickHouse password")
 
     # Redis / Celery
-    broker_url: str = Field(default="redis://broker-cache:6379/0", description="Celery broker URL")
+    broker_url: str = Field(
+        default="redis://broker-cache:6379/0", description="Celery broker URL"
+    )
 
     # Logging
     log_level: str = Field(default="INFO", description="Log level")
@@ -30,7 +32,9 @@ class EngineSettings(BaseSettings):
     db_max_overflow: int = Field(default=5, ge=0, le=50)
 
     # Enrichment
-    enrichment_timeout: int = Field(default=3, ge=1, le=30, description="External API timeout")
+    enrichment_timeout: int = Field(
+        default=3, ge=1, le=30, description="External API timeout"
+    )
     circuit_breaker_threshold: int = Field(default=5, ge=1, le=50)
     circuit_breaker_cooldown: int = Field(default=300, ge=30, le=3600)
 

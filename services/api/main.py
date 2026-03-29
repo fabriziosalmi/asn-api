@@ -134,24 +134,32 @@ class ErrorEnvelope(BaseModel):
     request_id: Optional[str] = None
 
 
-def error_response(status_code: int, code: str, message: str, request_id: str = "") -> JSONResponse:
+def error_response(
+    status_code: int, code: str, message: str, request_id: str = ""
+) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
-        content=ErrorEnvelope(error=message, code=code, request_id=request_id).model_dump(),
+        content=ErrorEnvelope(
+            error=message, code=code, request_id=request_id
+        ).model_dump(),
     )
 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     trace_id = getattr(request.state, "trace_id", "")
-    return error_response(exc.status_code, f"HTTP_{exc.status_code}", str(exc.detail), trace_id)
+    return error_response(
+        exc.status_code, f"HTTP_{exc.status_code}", str(exc.detail), trace_id
+    )
 
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     trace_id = getattr(request.state, "trace_id", "")
     logger.error("unhandled_exception", extra={"trace_id": trace_id, "error": str(exc)})
-    return error_response(500, "INTERNAL_ERROR", "An unexpected error occurred", trace_id)
+    return error_response(
+        500, "INTERNAL_ERROR", "An unexpected error occurred", trace_id
+    )
 
 
 # --- Models ---
@@ -284,9 +292,7 @@ async def request_middleware(request: Request, call_next):
     window = 60
 
     try:
-        current = await redis_client.eval(
-            RATE_LIMIT_SCRIPT, 1, rate_limit_key, window
-        )
+        current = await redis_client.eval(RATE_LIMIT_SCRIPT, 1, rate_limit_key, window)
         remaining = max(0, settings.api_rate_limit - current)
 
         if current > settings.api_rate_limit:
@@ -331,7 +337,18 @@ async def request_middleware(request: Request, call_next):
                 """INSERT INTO api_requests
                 (timestamp, endpoint, method, status_code, response_time_ms, cache_hit, client_ip, error_message)
                 VALUES""",
-                [(datetime.now(), endpoint, request.method, response.status_code, process_time, 1 if cache_hit else 0, client_ip, "")],
+                [
+                    (
+                        datetime.now(),
+                        endpoint,
+                        request.method,
+                        response.status_code,
+                        process_time,
+                        1 if cache_hit else 0,
+                        client_ip,
+                        "",
+                    )
+                ],
             ),
         )
 
@@ -348,7 +365,11 @@ def read_root():
     return {
         "service": "asn-api",
         "version": API_VERSION,
-        "endpoints": ["/v1/asn/{asn}", "/v1/asn/{asn}/history", "/v1/asn/{asn}/upstreams"],
+        "endpoints": [
+            "/v1/asn/{asn}",
+            "/v1/asn/{asn}/history",
+            "/v1/asn/{asn}/upstreams",
+        ],
     }
 
 
@@ -369,6 +390,7 @@ def health_check():
         ch_client.execute("SELECT 1")
         health["dependencies"]["clickhouse"] = "up"
         import redis as sync_redis
+
         sync_r = sync_redis.Redis(host=settings.redis_host, port=6379, socket_timeout=1)
         sync_r.ping()
         sync_r.close()
@@ -379,7 +401,9 @@ def health_check():
 
     if all(v == "up" for v in health["dependencies"].values()):
         return health
-    return Response(content=json.dumps(health), status_code=503, media_type="application/json")
+    return Response(
+        content=json.dumps(health), status_code=503, media_type="application/json"
+    )
 
 
 # =====================================================================
@@ -392,59 +416,128 @@ def generate_penalty_details(result: dict) -> List[PenaltyDetail]:
     details = []
 
     def add(code, sev, desc, action):
-        details.append(PenaltyDetail(code=code, severity=sev, description=desc, action=action))
+        details.append(
+            PenaltyDetail(code=code, severity=sev, description=desc, action=action)
+        )
 
     rpki_invalid = float(result.get("rpki_invalid_percent") or 0)
     if rpki_invalid > 1.0:
-        add("RPKI_INVALID", "HIGH", f"{rpki_invalid:.1f}% of routes have INVALID RPKI status", "Review ROA configuration for advertised prefixes.")
+        add(
+            "RPKI_INVALID",
+            "HIGH",
+            f"{rpki_invalid:.1f}% of routes have INVALID RPKI status",
+            "Review ROA configuration for advertised prefixes.",
+        )
 
     rpki_unknown = float(result.get("rpki_unknown_percent") or 0)
     if rpki_unknown > 50:
-        add("RPKI_UNKNOWN", "MEDIUM", f"{rpki_unknown:.1f}% routes have NO ROA (Unknown)", "Create ROAs to protect your prefixes from hijacking.")
+        add(
+            "RPKI_UNKNOWN",
+            "MEDIUM",
+            f"{rpki_unknown:.1f}% routes have NO ROA (Unknown)",
+            "Create ROAs to protect your prefixes from hijacking.",
+        )
 
     if result.get("has_route_leaks"):
-        add("ROUTE_LEAK", "HIGH", "Valley-free violation detected", "Investigate BGP filters for accidental transit leakage.")
+        add(
+            "ROUTE_LEAK",
+            "HIGH",
+            "Valley-free violation detected",
+            "Investigate BGP filters for accidental transit leakage.",
+        )
 
     if result.get("has_bogon_ads"):
-        add("BOGON_AD", "MEDIUM", "Advertising bogon/reserved prefixes", "Filter private/reserved ranges from EBGP sessions.")
+        add(
+            "BOGON_AD",
+            "MEDIUM",
+            "Advertising bogon/reserved prefixes",
+            "Filter private/reserved ranges from EBGP sessions.",
+        )
 
     if result.get("is_stub_but_transit"):
-        add("STUB_TRANSIT", "MEDIUM", "Stub ASN acting as transit", "Verify if you are unintentionally providing transit to peers.")
+        add(
+            "STUB_TRANSIT",
+            "MEDIUM",
+            "Stub ASN acting as transit",
+            "Verify if you are unintentionally providing transit to peers.",
+        )
 
     if result.get("spamhaus_listed"):
-        add("THREAT_SPAMHAUS", "CRITICAL", "Listed on Spamhaus DROP/EDROP", "Immediate removal required. Contact Spamhaus.")
+        add(
+            "THREAT_SPAMHAUS",
+            "CRITICAL",
+            "Listed on Spamhaus DROP/EDROP",
+            "Immediate removal required. Contact Spamhaus.",
+        )
 
     spam_rate = float(result.get("spam_emission_rate") or 0)
     if spam_rate > 0.1:
-        add("THREAT_SPAM", "HIGH", f"High spam emission rate ({spam_rate:.3f})", "Audit customer networks for compromised hosts.")
+        add(
+            "THREAT_SPAM",
+            "HIGH",
+            f"High spam emission rate ({spam_rate:.3f})",
+            "Audit customer networks for compromised hosts.",
+        )
 
     botnet_count = result.get("botnet_c2_count") or 0
     if botnet_count > 0:
-        add("THREAT_BOTNET", "CRITICAL", f"Hosting {botnet_count} Botnet C2 servers", "Identify and terminate C2 infrastructure immediately.")
+        add(
+            "THREAT_BOTNET",
+            "CRITICAL",
+            f"Hosting {botnet_count} Botnet C2 servers",
+            "Identify and terminate C2 infrastructure immediately.",
+        )
 
     phishing_count = result.get("phishing_hosting_count") or 0
     if phishing_count > 0:
-        add("THREAT_PHISHING", "HIGH", f"Hosting {phishing_count} phishing domains", "Take down reported phishing sites.")
+        add(
+            "THREAT_PHISHING",
+            "HIGH",
+            f"Hosting {phishing_count} phishing domains",
+            "Take down reported phishing sites.",
+        )
 
     malware_count = result.get("malware_distribution_count") or 0
     if malware_count > 0:
-        add("THREAT_MALWARE", "CRITICAL", f"Hosting {malware_count} malware distribution points", "Isolate infected hosts and remediate.")
+        add(
+            "THREAT_MALWARE",
+            "CRITICAL",
+            f"Hosting {malware_count} malware distribution points",
+            "Isolate infected hosts and remediate.",
+        )
 
     if result.get("is_whois_private"):
-        add("META_PRIVATE", "LOW", "WHOIS information is private", "Update RIR records with valid contact info.")
+        add(
+            "META_PRIVATE",
+            "LOW",
+            "WHOIS information is private",
+            "Update RIR records with valid contact info.",
+        )
 
     if not result.get("has_peeringdb_profile"):
-        add("META_NO_PDB", "LOW", "No PeeringDB profile", "Create a PeeringDB profile to improve visibility/trust.")
+        add(
+            "META_NO_PDB",
+            "LOW",
+            "No PeeringDB profile",
+            "Create a PeeringDB profile to improve visibility/trust.",
+        )
 
     tier1_count = result.get("upstream_tier1_count") or 0
     if tier1_count == 0:
-        add("META_NO_TIER1", "MEDIUM", "No direct Tier-1 upstream", "Consider acquiring transit from a Tier-1 provider.")
+        add(
+            "META_NO_TIER1",
+            "MEDIUM",
+            "No direct Tier-1 upstream",
+            "Consider acquiring transit from a Tier-1 provider.",
+        )
 
     return details
 
 
 @app.get("/v1/asn/{asn}", response_model=RiskScoreResponse, tags=["Scoring"])
-async def get_asn_score(asn: int, response: Response, request: Request, api_key: str = Depends(get_api_key)):
+async def get_asn_score(
+    asn: int, response: Response, request: Request, api_key: str = Depends(get_api_key)
+):
     """Get the detailed risk score card for a specific ASN."""
     _validate_asn(asn)
     trace_id = getattr(request.state, "trace_id", "")
@@ -463,7 +556,10 @@ async def get_asn_score(asn: int, response: Response, request: Request, api_key:
             return data
         request.state.cache_hit = False
     except Exception as e:
-        logger.error("cache_read_error", extra={"asn": asn, "trace_id": trace_id, "error": str(e)})
+        logger.error(
+            "cache_read_error",
+            extra={"asn": asn, "trace_id": trace_id, "error": str(e)},
+        )
         request.state.cache_hit = False
 
     query = text("""
@@ -486,7 +582,9 @@ async def get_asn_score(asn: int, response: Response, request: Request, api_key:
         result = conn.execute(query, {"asn": asn}).mappings().fetchone()
 
         if not result:
-            raise HTTPException(status_code=404, detail="ASN not found or not yet scored")
+            raise HTTPException(
+                status_code=404, detail="ASN not found or not yet scored"
+            )
 
         result = dict(result)
         score = result["total_score"]
@@ -498,10 +596,14 @@ async def get_asn_score(asn: int, response: Response, request: Request, api_key:
             if total_count:
                 total_count = int(total_count)
             else:
-                total_count = conn.execute(text("SELECT count(*) FROM asn_registry")).scalar()
+                total_count = conn.execute(
+                    text("SELECT count(*) FROM asn_registry")
+                ).scalar()
                 await redis_client.setex(cache_key_total, 300, total_count)
         except Exception:
-            total_count = conn.execute(text("SELECT count(*) FROM asn_registry")).scalar()
+            total_count = conn.execute(
+                text("SELECT count(*) FROM asn_registry")
+            ).scalar()
 
         count_lower = conn.execute(
             text("SELECT count(*) FROM asn_registry WHERE total_score < :score"),
@@ -512,7 +614,11 @@ async def get_asn_score(asn: int, response: Response, request: Request, api_key:
 
         level = result["risk_level"]
         if level == "UNKNOWN":
-            level = "CRITICAL" if score < 50 else "HIGH" if score < 75 else "MEDIUM" if score < 90 else "LOW"
+            level = (
+                "CRITICAL"
+                if score < 50
+                else "HIGH" if score < 75 else "MEDIUM" if score < 90 else "LOW"
+            )
 
         details = generate_penalty_details(result)
 
@@ -545,7 +651,8 @@ async def get_asn_score(asn: int, response: Response, request: Request, api_key:
                     "spam_emission_rate": float(result["spam_emission_rate"] or 0),
                     "botnet_c2_count": result["botnet_c2_count"] or 0,
                     "phishing_hosting_count": result["phishing_hosting_count"] or 0,
-                    "malware_distribution_count": result["malware_distribution_count"] or 0,
+                    "malware_distribution_count": result["malware_distribution_count"]
+                    or 0,
                 },
                 "metadata": {
                     "has_peeringdb_profile": result["has_peeringdb_profile"] or False,
@@ -554,14 +661,19 @@ async def get_asn_score(asn: int, response: Response, request: Request, api_key:
                 },
                 "forensics": {
                     "ddos_blackhole_count": result.get("ddos_blackhole_count") or 0,
-                    "excessive_prepending_count": result.get("excessive_prepending_count") or 0,
+                    "excessive_prepending_count": result.get(
+                        "excessive_prepending_count"
+                    )
+                    or 0,
                 },
             },
             "details": [d.model_dump() for d in details],
         }
 
         try:
-            await redis_client.setex(cache_key, settings.cache_ttl, json.dumps(response_data))
+            await redis_client.setex(
+                cache_key, settings.cache_ttl, json.dumps(response_data)
+            )
         except Exception as e:
             logger.error("cache_write_error", extra={"asn": asn, "error": str(e)})
 
@@ -623,7 +735,9 @@ async def get_asn_history(
 
 
 @app.post("/v1/whitelist", tags=["System"])
-async def add_to_whitelist(req: WhitelistRequest, request: Request, api_key: str = Depends(get_api_key)):
+async def add_to_whitelist(
+    req: WhitelistRequest, request: Request, api_key: str = Depends(get_api_key)
+):
     """Whitelist an ASN to exclude it from risk scoring."""
     trace_id = getattr(request.state, "trace_id", "")
     try:
@@ -641,15 +755,23 @@ async def add_to_whitelist(req: WhitelistRequest, request: Request, api_key: str
         # Invalidate cache for this ASN
         await redis_client.delete(f"score:v3:{req.asn}")
 
-        logger.info("whitelist_add", extra={"asn": req.asn, "reason": req.reason, "trace_id": trace_id})
+        logger.info(
+            "whitelist_add",
+            extra={"asn": req.asn, "reason": req.reason, "trace_id": trace_id},
+        )
         return {"status": "success", "message": f"ASN {req.asn} added to whitelist."}
     except Exception as e:
-        logger.error("whitelist_error", extra={"asn": req.asn, "error": str(e), "trace_id": trace_id})
+        logger.error(
+            "whitelist_error",
+            extra={"asn": req.asn, "error": str(e), "trace_id": trace_id},
+        )
         raise HTTPException(status_code=500, detail="Failed to update whitelist")
 
 
 @app.post("/v1/tools/bulk-risk-check", tags=["Scoring"])
-async def bulk_risk_check(req: BulkAnalysisRequest, api_key: str = Depends(get_api_key)):
+async def bulk_risk_check(
+    req: BulkAnalysisRequest, api_key: str = Depends(get_api_key)
+):
     """Bulk check multiple ASNs at once. Max 1000 ASNs per request."""
     if len(req.asns) > 1000:
         raise HTTPException(status_code=400, detail="Max 1000 ASNs per request")
@@ -668,14 +790,30 @@ async def bulk_risk_check(req: BulkAnalysisRequest, api_key: str = Depends(get_a
         for asn_id in req.asns:
             if asn_id in row_map:
                 r = row_map[asn_id]
-                results.append({"asn": asn_id, "score": r["total_score"], "level": r["risk_level"], "name": r["name"]})
+                results.append(
+                    {
+                        "asn": asn_id,
+                        "score": r["total_score"],
+                        "level": r["risk_level"],
+                        "name": r["name"],
+                    }
+                )
             else:
-                results.append({"asn": asn_id, "score": None, "level": "UNKNOWN", "name": "Unknown"})
+                results.append(
+                    {
+                        "asn": asn_id,
+                        "score": None,
+                        "level": "UNKNOWN",
+                        "name": "Unknown",
+                    }
+                )
 
     return {"results": results, "total": len(results)}
 
 
-@app.get("/v1/asn/{asn}/upstreams", response_model=PeerPressureResponse, tags=["Scoring"])
+@app.get(
+    "/v1/asn/{asn}/upstreams", response_model=PeerPressureResponse, tags=["Scoring"]
+)
 async def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
     """Upstream Risk Assessment - evaluates the risk of upstream providers."""
     _validate_asn(asn)
@@ -704,10 +842,16 @@ async def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
         ).fetchone()
         my_score = my_score_res[0] if my_score_res else 0
 
-        res = conn.execute(
-            text("SELECT asn, name, total_score, risk_level FROM asn_registry WHERE asn = ANY(:asns)"),
-            {"asns": upstream_ids},
-        ).mappings().fetchall()
+        res = (
+            conn.execute(
+                text(
+                    "SELECT asn, name, total_score, risk_level FROM asn_registry WHERE asn = ANY(:asns)"
+                ),
+                {"asns": upstream_ids},
+            )
+            .mappings()
+            .fetchall()
+        )
 
         score_map = {r["asn"]: r for r in res}
         total_ups_score = 0
@@ -716,14 +860,35 @@ async def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
             u_asn, count = u_row
             if u_asn in score_map:
                 r = score_map[u_asn]
-                upstreams_data.append({"asn": u_asn, "name": r["name"], "score": r["total_score"], "risk_level": r["risk_level"], "connection_count": count})
+                upstreams_data.append(
+                    {
+                        "asn": u_asn,
+                        "name": r["name"],
+                        "score": r["total_score"],
+                        "risk_level": r["risk_level"],
+                        "connection_count": count,
+                    }
+                )
                 total_ups_score += r["total_score"]
             else:
-                upstreams_data.append({"asn": u_asn, "name": "Unknown", "score": 50, "risk_level": "UNKNOWN", "connection_count": count})
+                upstreams_data.append(
+                    {
+                        "asn": u_asn,
+                        "name": "Unknown",
+                        "score": 50,
+                        "risk_level": "UNKNOWN",
+                        "connection_count": count,
+                    }
+                )
                 total_ups_score += 50
 
     avg_score = int(total_ups_score / len(upstreams_data)) if upstreams_data else 0
-    return {"asn": asn, "risk_score": my_score, "avg_upstream_score": avg_score, "upstreams": upstreams_data}
+    return {
+        "asn": asn,
+        "risk_score": my_score,
+        "avg_upstream_score": avg_score,
+        "upstreams": upstreams_data,
+    }
 
 
 # =====================================================================
@@ -743,26 +908,48 @@ async def invalidate_cache(asn: int, api_key: str = Depends(get_api_key)):
 # =====================================================================
 
 
-@app.get("/asn/{asn}", response_model=RiskScoreResponse, tags=["Scoring"], include_in_schema=False)
-async def get_asn_score_compat(asn: int, response: Response, request: Request, api_key: str = Depends(get_api_key)):
+@app.get(
+    "/asn/{asn}",
+    response_model=RiskScoreResponse,
+    tags=["Scoring"],
+    include_in_schema=False,
+)
+async def get_asn_score_compat(
+    asn: int, response: Response, request: Request, api_key: str = Depends(get_api_key)
+):
     return await get_asn_score(asn, response, request, api_key)
 
 
 @app.get("/asn/{asn}/history", tags=["Analytics"], include_in_schema=False)
-async def get_asn_history_compat(asn: int, days: int = 30, offset: int = 0, limit: int = 200, api_key: str = Depends(get_api_key)):
+async def get_asn_history_compat(
+    asn: int,
+    days: int = 30,
+    offset: int = 0,
+    limit: int = 200,
+    api_key: str = Depends(get_api_key),
+):
     return await get_asn_history(asn, days, offset, limit, api_key)
 
 
 @app.post("/whitelist", tags=["System"], include_in_schema=False)
-async def add_to_whitelist_compat(req: WhitelistRequest, request: Request, api_key: str = Depends(get_api_key)):
+async def add_to_whitelist_compat(
+    req: WhitelistRequest, request: Request, api_key: str = Depends(get_api_key)
+):
     return await add_to_whitelist(req, request, api_key)
 
 
 @app.post("/tools/bulk-risk-check", tags=["Scoring"], include_in_schema=False)
-async def bulk_risk_check_compat(req: BulkAnalysisRequest, api_key: str = Depends(get_api_key)):
+async def bulk_risk_check_compat(
+    req: BulkAnalysisRequest, api_key: str = Depends(get_api_key)
+):
     return await bulk_risk_check(req, api_key)
 
 
-@app.get("/asn/{asn}/upstreams", response_model=PeerPressureResponse, tags=["Scoring"], include_in_schema=False)
+@app.get(
+    "/asn/{asn}/upstreams",
+    response_model=PeerPressureResponse,
+    tags=["Scoring"],
+    include_in_schema=False,
+)
 async def get_peer_pressure_compat(asn: int, api_key: str = Depends(get_api_key)):
     return await get_peer_pressure(asn, api_key)

@@ -18,7 +18,9 @@ os.environ.setdefault("LOG_FORMAT", "text")
 # Add services to path
 # api path MUST be first so its settings.py is found before engine's
 _api_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../services/api"))
-_engine_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../services/engine"))
+_engine_path = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "../services/engine")
+)
 _services_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../services"))
 # Remove any existing entries that might conflict
 for p in [_api_path, _engine_path, _services_path]:
@@ -29,9 +31,9 @@ sys.path.insert(1, _engine_path)
 sys.path.insert(2, _services_path)
 
 # Mock dependencies before importing app (since it connects on import)
-with patch("redis.asyncio.Redis"), \
-     patch("sqlalchemy.create_engine"), \
-     patch("clickhouse_driver.Client"):
+with patch("redis.asyncio.Redis"), patch("sqlalchemy.create_engine"), patch(
+    "clickhouse_driver.Client"
+):
     from api.main import app
 
 
@@ -54,15 +56,16 @@ def mock_dependencies():
     mock_ch = MagicMock()
     mock_ch.execute.return_value = MagicMock()
 
-    with patch("api.main.redis_client", mock_redis), \
-         patch("api.main.pg_engine", mock_pg), \
-         patch("api.main.ch_client", mock_ch):
+    with patch("api.main.redis_client", mock_redis), patch(
+        "api.main.pg_engine", mock_pg
+    ), patch("api.main.ch_client", mock_ch):
         yield (mock_redis, mock_pg, mock_ch)
 
 
 @pytest.fixture
 def client():
     from starlette.testclient import TestClient
+
     return TestClient(app)
 
 
