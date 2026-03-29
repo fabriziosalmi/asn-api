@@ -1,4 +1,4 @@
--- BGP Routing Events (High Volume)
+-- BGP Routing Events (High Volume) - 90 day retention
 CREATE TABLE IF NOT EXISTS bgp_events (
     timestamp DateTime,
     asn UInt32,
@@ -9,9 +9,11 @@ CREATE TABLE IF NOT EXISTS bgp_events (
     community Array(UInt32)
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
-ORDER BY (timestamp, asn);
+ORDER BY (timestamp, asn)
+TTL timestamp + INTERVAL 90 DAY DELETE
+SETTINGS merge_with_ttl_timeout = 86400;
 
--- Threat Intelligence Feeds & Logs
+-- Threat Intelligence Feeds & Logs - 180 day retention
 CREATE TABLE IF NOT EXISTS threat_events (
     timestamp DateTime,
     asn UInt32,
@@ -21,7 +23,8 @@ CREATE TABLE IF NOT EXISTS threat_events (
     description String
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
-ORDER BY (timestamp, asn);
+ORDER BY (timestamp, asn)
+TTL timestamp + INTERVAL 180 DAY DELETE;
 
 -- Calculated Daily Metrics for History/Trending
 CREATE TABLE IF NOT EXISTS daily_metrics (
@@ -87,7 +90,7 @@ FROM bgp_events
 WHERE countEqual(path, asn) > 3
 GROUP BY date, asn;
 
--- API Request Logging
+-- API Request Logging - 30 day retention
 CREATE TABLE IF NOT EXISTS api_requests (
     timestamp DateTime,
     endpoint String,
@@ -99,5 +102,7 @@ CREATE TABLE IF NOT EXISTS api_requests (
     error_message String
 ) ENGINE = MergeTree()
 PARTITION BY toDate(timestamp)
-ORDER BY (timestamp, endpoint);
+ORDER BY (timestamp, endpoint)
+TTL timestamp + INTERVAL 30 DAY DELETE
+SETTINGS merge_with_ttl_timeout = 86400;
 

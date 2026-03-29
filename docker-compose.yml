@@ -2,8 +2,7 @@ services:
   # ------------------------------------------------------------------
   # 1. DATA STORAGE LAYER
   # ------------------------------------------------------------------
-  
-  # PostgreSQL: Identity, Current Score, User Management
+
   db-metadata:
     image: postgres:15-alpine
     container_name: asn_db_meta
@@ -28,7 +27,6 @@ services:
           cpus: '0.50'
           memory: 512M
 
-  # ClickHouse: Time Series, BGP Updates, Logs
   db-timeseries:
     image: clickhouse/clickhouse-server:latest
     container_name: asn_db_history
@@ -36,7 +34,7 @@ services:
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
-      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-default}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     ulimits:
       nofile:
@@ -48,7 +46,7 @@ services:
     networks:
       - asn_backend
     ports:
-      - "8123:8123" # HTTP Port for debugging
+      - "8123:8123"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
       interval: 5s
@@ -60,11 +58,11 @@ services:
           cpus: '1.0'
           memory: 2G
 
-  # Redis: Message Broker & API Cache
   broker-cache:
     image: redis:7-alpine
     container_name: asn_broker
     restart: always
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     networks:
       - asn_backend
     healthcheck:
@@ -77,9 +75,8 @@ services:
   # 2. PROCESSING LAYER (WORKERS)
   # ------------------------------------------------------------------
 
-  # Ingestor: Fetches BGP dumps and Threat Intelligence
   asn-ingestor:
-    build: 
+    build:
       context: ./services/ingestor
     container_name: asn_worker_ingest
     restart: unless-stopped
@@ -95,6 +92,7 @@ services:
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - PYTHONUNBUFFERED=1
       - RIPE_RIS_ENABLED=true
+      - LOG_FORMAT=${LOG_FORMAT:-json}
     networks:
       - asn_backend
       - asn_public
@@ -104,9 +102,8 @@ services:
           cpus: '0.50'
           memory: 512M
 
-  # Engine: Calculates Risk Scores (Batch & Realtime)
   asn-engine:
-    build: 
+    build:
       context: ./services/engine
     container_name: asn_worker_scoring
     restart: unless-stopped
@@ -126,6 +123,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
     networks:
       - asn_backend
       - asn_public
@@ -139,14 +137,15 @@ services:
   # 3. INTERFACE LAYER (API & DASHBOARD)
   # ------------------------------------------------------------------
 
-  # API Gateway: FastAPI
   asn-api:
-    build: 
+    build:
       context: ./services/api
     container_name: asn_api_gateway
     restart: always
     depends_on:
       db-metadata:
+        condition: service_healthy
+      db-timeseries:
         condition: service_healthy
       broker-cache:
         condition: service_healthy
@@ -163,6 +162,8 @@ services:
       - CACHE_TTL=${CACHE_TTL:-60}
       - API_RATE_LIMIT=${API_RATE_LIMIT:-100}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     networks:
       - asn_backend
       - asn_public
@@ -181,12 +182,10 @@ services:
       - ./services/dashboard/dashboards:/etc/grafana/provisioning/dashboards/json
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${POSTGRES_PASSWORD} # Use a secure password from env
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_AUTH_ANONYMOUS_ENABLED=false
-      # Install ClickHouse plugin automatically
       - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
-      # Datasource Credentials
       - CLICKHOUSE_USER=${CLICKHOUSE_USER}
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - POSTGRES_USER=${POSTGRES_USER}
@@ -206,7 +205,6 @@ services:
           cpus: '0.50'
           memory: 512M
 
-  # Nginx Reverse Proxy
   proxy:
     image: nginx:stable-alpine
     container_name: asn_proxy
