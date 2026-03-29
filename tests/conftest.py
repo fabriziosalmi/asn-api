@@ -13,9 +13,20 @@ os.environ.setdefault("POSTGRES_DB", "test_db")
 os.environ.setdefault("DB_META_HOST", "localhost")
 os.environ.setdefault("DB_TS_HOST", "localhost")
 os.environ.setdefault("REDIS_HOST", "localhost")
+os.environ.setdefault("LOG_FORMAT", "text")
 
 # Add services to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../services"))
+# api path MUST be first so its settings.py is found before engine's
+_api_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../services/api"))
+_engine_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../services/engine"))
+_services_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../services"))
+# Remove any existing entries that might conflict
+for p in [_api_path, _engine_path, _services_path]:
+    if p in sys.path:
+        sys.path.remove(p)
+sys.path.insert(0, _api_path)
+sys.path.insert(1, _engine_path)
+sys.path.insert(2, _services_path)
 
 # Mock dependencies before importing app (since it connects on import)
 with patch("redis.asyncio.Redis"), \
@@ -31,6 +42,8 @@ def mock_dependencies():
     mock_redis.setex = AsyncMock(return_value=True)
     mock_redis.eval = AsyncMock(return_value=1)
     mock_redis.ttl = AsyncMock(return_value=60)
+    mock_redis.delete = AsyncMock(return_value=1)
+    mock_redis.aclose = AsyncMock()
 
     mock_pg = MagicMock()
     mock_pg_conn = MagicMock()
@@ -50,7 +63,6 @@ def mock_dependencies():
 @pytest.fixture
 def client():
     from starlette.testclient import TestClient
-
     return TestClient(app)
 
 

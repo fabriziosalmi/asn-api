@@ -1,14 +1,16 @@
 # Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
 
-import os
 import json
 import time
 import hashlib
 import logging
 import urllib.parse
 from datetime import datetime
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Security, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
@@ -16,99 +18,48 @@ from clickhouse_driver import Client
 from typing import List, Optional, Dict
 import redis.asyncio as aioredis
 import asyncio
+import os
 
-# Logging - structured format
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(name)s %(levelname)s %(message)s",
-)
+from pythonjsonlogger.json import JsonFormatter as JsonLogFormatter
+
+from api_settings import Settings
+
+# --- Configuration (validated) ---
+settings = Settings()
+
+# --- Structured JSON Logging ---
+_log_handler = logging.StreamHandler()
+if settings.log_format == "json":
+    _log_handler.setFormatter(
+        JsonLogFormatter(
+            "%(asctime)s %(name)s %(levelname)s %(message)s",
+            rename_fields={"asctime": "timestamp", "levelname": "level"},
+        )
+    )
+logging.basicConfig(level=getattr(logging, settings.log_level), handlers=[_log_handler])
 logger = logging.getLogger("asn_api")
 
-app = FastAPI(
-    title="ASN Risk API",
-    version="7.0.0",
-    description="""
-    ## Autonomous System Risk Scoring API
-
-    This API provides real-time risk assessment for Internet Autonomous Systems (ASNs).
-    It aggregates signals from **BGP Routing**, **Threat Intelligence**, and **Historical Stability** to calculate a trust score (0-100).
-
-    ### Key Features
-    * **Risk Score**: 0 (Malicious) to 100 (Trusted).
-    * **Breakdown**: Hygiene, Threat, and Stability components.
-    * **History**: 30-day trend analysis.
-    """,
-    openapi_tags=[
-        {"name": "Scoring", "description": "Core risk assessment endpoints."},
-        {"name": "Analytics", "description": "Historical data and trends."},
-        {"name": "System", "description": "Health checks and metadata."},
-    ],
-)
-
-# CORS - configurable allowed origins
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Security
-API_KEY_NAME = "X-API-Key"
-API_KEY = os.getenv("API_SECRET_KEY")
-
-if not API_KEY:
-    raise RuntimeError(
-        "CRITICAL: API_SECRET_KEY environment variable is missing. Halting execution for security."
-    )
-
-api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
-
-
-async def get_api_key(
-    request: Request, api_key_header: str = Security(api_key_header)
-):
-    if not api_key_header or api_key_header != API_KEY:
-        client_ip = request.client.host if request.client else "unknown"
-        logger.warning("auth_failure ip=%s", client_ip)
-        raise HTTPException(status_code=403, detail="Invalid or Missing API Key")
-    return api_key_header
-
-
-# Database Connections - unified env var naming
-PG_USER = os.getenv("POSTGRES_USER")
-PG_PASS = os.getenv("POSTGRES_PASSWORD")
-PG_HOST = os.getenv("DB_META_HOST", "db-metadata")
-PG_DB = os.getenv("POSTGRES_DB", "asn_registry")
-CH_HOST = os.getenv("DB_TS_HOST", "db-timeseries")
-CH_USER = os.getenv("CLICKHOUSE_USER", "default")
-CH_PASS = os.getenv("CLICKHOUSE_PASSWORD", "")
-
-if not PG_USER or not PG_PASS:
-    raise RuntimeError(
-        "CRITICAL: POSTGRES_USER and POSTGRES_PASSWORD must be set."
-    )
-
-PG_PASS_SAFE = urllib.parse.quote_plus(PG_PASS)
+# --- Database Connections ---
+PG_PASS_SAFE = urllib.parse.quote_plus(settings.postgres_password)
 
 pg_engine = create_engine(
-    f"postgresql://{PG_USER}:{PG_PASS_SAFE}@{PG_HOST}/{PG_DB}",
-    pool_size=20,
-    max_overflow=10,
+    f"postgresql://{settings.postgres_user}:{PG_PASS_SAFE}@{settings.db_meta_host}/{settings.postgres_db}",
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
     pool_pre_ping=True,
 )
-ch_client = Client(host=CH_HOST, user=CH_USER, password=CH_PASS)
-
-# Async Redis
-REDIS_HOST = os.getenv("REDIS_HOST", "broker-cache")
-redis_client: aioredis.Redis = aioredis.Redis(
-    host=REDIS_HOST, port=6379, decode_responses=True, socket_timeout=2
+ch_client = Client(
+    host=settings.db_ts_host,
+    user=settings.clickhouse_user,
+    password=settings.clickhouse_password,
 )
-CACHE_TTL = int(os.getenv("CACHE_TTL", "60"))
 
-# Rate limiting Lua script - atomic INCR + EXPIRE
+# --- Async Redis ---
+redis_client: aioredis.Redis = aioredis.Redis(
+    host=settings.redis_host, port=6379, decode_responses=True, socket_timeout=2
+)
+
+# --- Rate Limiting Lua Script (atomic) ---
 RATE_LIMIT_SCRIPT = """
 local current = redis.call('INCR', KEYS[1])
 if current == 1 then
@@ -117,9 +68,90 @@ end
 return current
 """
 
-# Valid ASN range (32-bit)
+# --- Constants ---
 ASN_MIN = 1
 ASN_MAX = 4294967295
+API_VERSION = "7.1.0"
+
+
+# --- Lifespan ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("startup", extra={"version": API_VERSION})
+    yield
+    await redis_client.aclose()
+    logger.info("shutdown")
+
+
+# --- App ---
+app = FastAPI(
+    title="ASN Risk API",
+    version=API_VERSION,
+    description="""
+    ## Autonomous System Risk Scoring API
+
+    Real-time risk assessment for Internet Autonomous Systems (ASNs).
+    Aggregates signals from **BGP Routing**, **Threat Intelligence**, and **Historical Stability**.
+
+    ### Key Features
+    * **Risk Score**: 0 (Malicious) to 100 (Trusted).
+    * **Breakdown**: Hygiene, Threat, and Stability components.
+    * **History**: Up to 365-day trend analysis with pagination.
+    """,
+    openapi_tags=[
+        {"name": "Scoring", "description": "Core risk assessment endpoints."},
+        {"name": "Analytics", "description": "Historical data and trends."},
+        {"name": "System", "description": "Health checks and metadata."},
+    ],
+    lifespan=lifespan,
+)
+
+# --- CORS ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins.split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Security ---
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def get_api_key(request: Request, api_key_header: str = Security(api_key_header)):
+    if not api_key_header or api_key_header != settings.api_secret_key:
+        client_ip = request.client.host if request.client else "unknown"
+        logger.warning("auth_failure", extra={"ip": client_ip})
+        raise HTTPException(status_code=403, detail="Invalid or Missing API Key")
+    return api_key_header
+
+
+# --- Error Envelope ---
+class ErrorEnvelope(BaseModel):
+    error: str
+    code: str
+    request_id: Optional[str] = None
+
+
+def error_response(status_code: int, code: str, message: str, request_id: str = "") -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content=ErrorEnvelope(error=message, code=code, request_id=request_id).model_dump(),
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    trace_id = getattr(request.state, "trace_id", "")
+    return error_response(exc.status_code, f"HTTP_{exc.status_code}", str(exc.detail), trace_id)
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    trace_id = getattr(request.state, "trace_id", "")
+    logger.error("unhandled_exception", extra={"trace_id": trace_id, "error": str(exc)})
+    return error_response(500, "INTERNAL_ERROR", "An unexpected error occurred", trace_id)
 
 
 # --- Models ---
@@ -185,6 +217,14 @@ class HistoryPoint(BaseModel):
     score: int
 
 
+class PaginatedHistory(BaseModel):
+    asn: int
+    total: int
+    offset: int
+    limit: int
+    data: List[HistoryPoint]
+
+
 class UpstreamPeer(BaseModel):
     asn: int
     name: Optional[str] = None
@@ -209,11 +249,6 @@ class BulkAnalysisRequest(BaseModel):
     asns: List[int] = Field(..., max_length=1000)
 
 
-class ErrorResponse(BaseModel):
-    error: str
-    request_id: Optional[str] = None
-
-
 # --- Helpers ---
 
 
@@ -229,105 +264,91 @@ def _stable_etag(value: str) -> str:
     return f'W/"{hashlib.sha256(value.encode()).hexdigest()[:16]}"'
 
 
-# --- Routes ---
+# --- Middleware ---
 
 
 @app.middleware("http")
-async def add_response_time(request: Request, call_next):
+async def request_middleware(request: Request, call_next):
     start_time = time.time()
-    cache_hit = False
-    error_msg = ""
 
-    # Generate Trace ID
+    # Trace ID
     trace_id = request.headers.get(
         "X-Trace-ID", f"{int(time.time())}-{os.urandom(4).hex()}"
     )
+    request.state.trace_id = trace_id
+    request.state.cache_hit = False
 
-    # Rate Limiting (atomic via Lua script)
+    # Rate Limiting (atomic)
     client_ip = request.client.host if request.client else "0.0.0.0"
     rate_limit_key = f"rl:{client_ip}"
-    limit = int(os.getenv("API_RATE_LIMIT", "100"))
     window = 60
 
     try:
         current = await redis_client.eval(
             RATE_LIMIT_SCRIPT, 1, rate_limit_key, window
         )
-        remaining = max(0, limit - current)
+        remaining = max(0, settings.api_rate_limit - current)
 
-        if current > limit:
+        if current > settings.api_rate_limit:
             ttl = await redis_client.ttl(rate_limit_key)
-            return Response(
-                content=json.dumps(
-                    {"error": f"Rate limit exceeded. Try again in {ttl} seconds."}
-                ),
+            return JSONResponse(
                 status_code=429,
-                media_type="application/json",
+                content=ErrorEnvelope(
+                    error=f"Rate limit exceeded. Try again in {ttl} seconds.",
+                    code="RATE_LIMITED",
+                    request_id=trace_id,
+                ).model_dump(),
                 headers={
-                    "X-RateLimit-Limit": str(limit),
+                    "X-RateLimit-Limit": str(settings.api_rate_limit),
                     "X-RateLimit-Remaining": "0",
                     "X-RateLimit-Reset": str(int(time.time()) + ttl),
                     "X-Trace-ID": trace_id,
+                    "Retry-After": str(ttl),
                 },
             )
     except Exception as e:
-        logger.error("rate_limit_error trace_id=%s error=%s", trace_id, e)
-        remaining = limit - 1
+        logger.error("rate_limit_error", extra={"trace_id": trace_id, "error": str(e)})
+        remaining = settings.api_rate_limit - 1
 
     response = await call_next(request)
     process_time = (time.time() - start_time) * 1000
 
     # Standard headers
     response.headers["X-Response-Time"] = f"{process_time:.2f}ms"
-    response.headers["X-RateLimit-Limit"] = str(limit)
+    response.headers["X-RateLimit-Limit"] = str(settings.api_rate_limit)
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     response.headers["X-RateLimit-Reset"] = str(int(time.time()) + window)
     response.headers["X-Trace-ID"] = trace_id
 
-    # Extract details for logging
+    # Async ClickHouse logging (fire-and-forget)
     endpoint = request.url.path
-    method = request.method
-    status_code = response.status_code
-
-    if hasattr(request.state, "cache_hit"):
-        cache_hit = request.state.cache_hit
-
-    # Log to ClickHouse asynchronously (non-blocking, fire-and-forget)
     if endpoint.startswith("/v1/asn"):
+        cache_hit = getattr(request.state, "cache_hit", False)
         loop = asyncio.get_event_loop()
         loop.run_in_executor(
             None,
             lambda: ch_client.execute(
                 """INSERT INTO api_requests
-            (timestamp, endpoint, method, status_code, response_time_ms, cache_hit, client_ip, error_message)
-            VALUES""",
-                [
-                    (
-                        datetime.now(),
-                        endpoint,
-                        method,
-                        status_code,
-                        process_time,
-                        1 if cache_hit else 0,
-                        client_ip,
-                        error_msg,
-                    )
-                ],
+                (timestamp, endpoint, method, status_code, response_time_ms, cache_hit, client_ip, error_message)
+                VALUES""",
+                [(datetime.now(), endpoint, request.method, response.status_code, process_time, 1 if cache_hit else 0, client_ip, "")],
             ),
         )
 
     return response
 
 
-# --- System endpoints (no version prefix) ---
+# =====================================================================
+# SYSTEM ENDPOINTS
+# =====================================================================
 
 
 @app.get("/", tags=["System"])
 def read_root():
     return {
         "service": "asn-api",
-        "version": "7.0.0",
-        "endpoints": ["/v1/asn/{asn}", "/v1/asn/{asn}/history"],
+        "version": API_VERSION,
+        "endpoints": ["/v1/asn/{asn}", "/v1/asn/{asn}/history", "/v1/asn/{asn}/upstreams"],
     }
 
 
@@ -337,7 +358,7 @@ def health_check():
     health = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "7.0.0",
+        "version": API_VERSION,
         "dependencies": {"postgres": "down", "clickhouse": "down", "redis": "down"},
     }
 
@@ -345,31 +366,25 @@ def health_check():
         with pg_engine.connect() as conn:
             conn.execute(text("SELECT 1"))
             health["dependencies"]["postgres"] = "up"
-
         ch_client.execute("SELECT 1")
         health["dependencies"]["clickhouse"] = "up"
-
-        # Sync ping for health check is acceptable
         import redis as sync_redis
-
-        sync_r = sync_redis.Redis(host=REDIS_HOST, port=6379, socket_timeout=1)
+        sync_r = sync_redis.Redis(host=settings.redis_host, port=6379, socket_timeout=1)
         sync_r.ping()
         sync_r.close()
         health["dependencies"]["redis"] = "up"
-
     except Exception as e:
         health["status"] = "degraded"
-        logger.error("health_check_failed error=%s", e)
+        logger.error("health_check_failed", extra={"error": str(e)})
 
     if all(v == "up" for v in health["dependencies"].values()):
         return health
-    else:
-        return Response(
-            content=json.dumps(health), status_code=503, media_type="application/json"
-        )
+    return Response(content=json.dumps(health), status_code=503, media_type="application/json")
 
 
-# --- V1 API endpoints ---
+# =====================================================================
+# V1 API ENDPOINTS
+# =====================================================================
 
 
 def generate_penalty_details(result: dict) -> List[PenaltyDetail]:
@@ -377,133 +392,62 @@ def generate_penalty_details(result: dict) -> List[PenaltyDetail]:
     details = []
 
     def add(code, sev, desc, action):
-        details.append(
-            PenaltyDetail(code=code, severity=sev, description=desc, action=action)
-        )
+        details.append(PenaltyDetail(code=code, severity=sev, description=desc, action=action))
 
     rpki_invalid = float(result.get("rpki_invalid_percent") or 0)
     if rpki_invalid > 1.0:
-        add(
-            "RPKI_INVALID",
-            "HIGH",
-            f"{rpki_invalid:.1f}% of routes have INVALID RPKI status",
-            "Review ROA configuration for advertised prefixes.",
-        )
+        add("RPKI_INVALID", "HIGH", f"{rpki_invalid:.1f}% of routes have INVALID RPKI status", "Review ROA configuration for advertised prefixes.")
 
     rpki_unknown = float(result.get("rpki_unknown_percent") or 0)
     if rpki_unknown > 50:
-        add(
-            "RPKI_UNKNOWN",
-            "MEDIUM",
-            f"{rpki_unknown:.1f}% routes have NO ROA (Unknown)",
-            "Create ROAs to protect your prefixes from hijacking.",
-        )
+        add("RPKI_UNKNOWN", "MEDIUM", f"{rpki_unknown:.1f}% routes have NO ROA (Unknown)", "Create ROAs to protect your prefixes from hijacking.")
 
     if result.get("has_route_leaks"):
-        add(
-            "ROUTE_LEAK",
-            "HIGH",
-            "Valley-free violation detected",
-            "Investigate BGP filters for accidental transit leakage.",
-        )
+        add("ROUTE_LEAK", "HIGH", "Valley-free violation detected", "Investigate BGP filters for accidental transit leakage.")
 
     if result.get("has_bogon_ads"):
-        add(
-            "BOGON_AD",
-            "MEDIUM",
-            "Advertising bogon/reserved prefixes",
-            "Filter private/reserved ranges from EBGP sessions.",
-        )
+        add("BOGON_AD", "MEDIUM", "Advertising bogon/reserved prefixes", "Filter private/reserved ranges from EBGP sessions.")
 
     if result.get("is_stub_but_transit"):
-        add(
-            "STUB_TRANSIT",
-            "MEDIUM",
-            "Stub ASN acting as transit",
-            "Verify if you are unintentionally providing transit to peers.",
-        )
+        add("STUB_TRANSIT", "MEDIUM", "Stub ASN acting as transit", "Verify if you are unintentionally providing transit to peers.")
 
     if result.get("spamhaus_listed"):
-        add(
-            "THREAT_SPAMHAUS",
-            "CRITICAL",
-            "Listed on Spamhaus DROP/EDROP",
-            "Immediate removal required. Contact Spamhaus.",
-        )
+        add("THREAT_SPAMHAUS", "CRITICAL", "Listed on Spamhaus DROP/EDROP", "Immediate removal required. Contact Spamhaus.")
 
     spam_rate = float(result.get("spam_emission_rate") or 0)
     if spam_rate > 0.1:
-        add(
-            "THREAT_SPAM",
-            "HIGH",
-            f"High spam emission rate ({spam_rate:.3f})",
-            "Audit customer networks for compromised hosts.",
-        )
+        add("THREAT_SPAM", "HIGH", f"High spam emission rate ({spam_rate:.3f})", "Audit customer networks for compromised hosts.")
 
     botnet_count = result.get("botnet_c2_count") or 0
     if botnet_count > 0:
-        add(
-            "THREAT_BOTNET",
-            "CRITICAL",
-            f"Hosting {botnet_count} Botnet C2 servers",
-            "Identify and terminate C2 infrastructure immediately.",
-        )
+        add("THREAT_BOTNET", "CRITICAL", f"Hosting {botnet_count} Botnet C2 servers", "Identify and terminate C2 infrastructure immediately.")
 
     phishing_count = result.get("phishing_hosting_count") or 0
     if phishing_count > 0:
-        add(
-            "THREAT_PHISHING",
-            "HIGH",
-            f"Hosting {phishing_count} phishing domains",
-            "Take down reported phishing sites.",
-        )
+        add("THREAT_PHISHING", "HIGH", f"Hosting {phishing_count} phishing domains", "Take down reported phishing sites.")
 
     malware_count = result.get("malware_distribution_count") or 0
     if malware_count > 0:
-        add(
-            "THREAT_MALWARE",
-            "CRITICAL",
-            f"Hosting {malware_count} malware distribution points",
-            "Isolate infected hosts and remediate.",
-        )
+        add("THREAT_MALWARE", "CRITICAL", f"Hosting {malware_count} malware distribution points", "Isolate infected hosts and remediate.")
 
     if result.get("is_whois_private"):
-        add(
-            "META_PRIVATE",
-            "LOW",
-            "WHOIS information is private",
-            "Update RIR records with valid contact info.",
-        )
+        add("META_PRIVATE", "LOW", "WHOIS information is private", "Update RIR records with valid contact info.")
 
     if not result.get("has_peeringdb_profile"):
-        add(
-            "META_NO_PDB",
-            "LOW",
-            "No PeeringDB profile",
-            "Create a PeeringDB profile to improve visibility/trust.",
-        )
+        add("META_NO_PDB", "LOW", "No PeeringDB profile", "Create a PeeringDB profile to improve visibility/trust.")
 
     tier1_count = result.get("upstream_tier1_count") or 0
     if tier1_count == 0:
-        add(
-            "META_NO_TIER1",
-            "MEDIUM",
-            "No direct Tier-1 upstream",
-            "Consider acquiring transit from a Tier-1 provider for better reachability/trust.",
-        )
+        add("META_NO_TIER1", "MEDIUM", "No direct Tier-1 upstream", "Consider acquiring transit from a Tier-1 provider.")
 
     return details
 
 
 @app.get("/v1/asn/{asn}", response_model=RiskScoreResponse, tags=["Scoring"])
-async def get_asn_score(
-    asn: int, response: Response, request: Request, api_key: str = Depends(get_api_key)
-):
-    """
-    **Get the detailed risk score card for a specific ASN.**
-    Requires API Key.
-    """
+async def get_asn_score(asn: int, response: Response, request: Request, api_key: str = Depends(get_api_key)):
+    """Get the detailed risk score card for a specific ASN."""
     _validate_asn(asn)
+    trace_id = getattr(request.state, "trace_id", "")
 
     cache_key = f"score:v3:{asn}"
     try:
@@ -514,14 +458,12 @@ async def get_asn_score(
             etag = _stable_etag(data["last_updated"])
             if request.headers.get("if-none-match") == etag:
                 return Response(status_code=304)
-
             response.headers["ETag"] = etag
-            response.headers["Cache-Control"] = f"public, max-age={CACHE_TTL}"
+            response.headers["Cache-Control"] = f"public, max-age={settings.cache_ttl}"
             return data
-
         request.state.cache_hit = False
     except Exception as e:
-        logger.error("cache_read_error asn=%s error=%s", asn, e)
+        logger.error("cache_read_error", extra={"asn": asn, "trace_id": trace_id, "error": str(e)})
         request.state.cache_hit = False
 
     query = text("""
@@ -547,44 +489,30 @@ async def get_asn_score(
             raise HTTPException(status_code=404, detail="ASN not found or not yet scored")
 
         result = dict(result)
-
         score = result["total_score"]
 
+        # Rank percentile (cached total count)
         cache_key_total = "stats:asn_total_count"
         try:
             total_count = await redis_client.get(cache_key_total)
             if total_count:
                 total_count = int(total_count)
             else:
-                total_count = conn.execute(
-                    text("SELECT count(*) FROM asn_registry")
-                ).scalar()
+                total_count = conn.execute(text("SELECT count(*) FROM asn_registry")).scalar()
                 await redis_client.setex(cache_key_total, 300, total_count)
         except Exception:
-            total_count = conn.execute(
-                text("SELECT count(*) FROM asn_registry")
-            ).scalar()
+            total_count = conn.execute(text("SELECT count(*) FROM asn_registry")).scalar()
 
-        rank_query = text(
-            "SELECT count(*) FROM asn_registry WHERE total_score < :score"
-        )
-        count_lower = conn.execute(rank_query, {"score": score}).scalar()
+        count_lower = conn.execute(
+            text("SELECT count(*) FROM asn_registry WHERE total_score < :score"),
+            {"score": score},
+        ).scalar()
 
-        percentile = 0.0
-        if total_count > 0:
-            percentile = (count_lower / total_count) * 100.0
+        percentile = (count_lower / total_count * 100.0) if total_count > 0 else 0.0
 
         level = result["risk_level"]
         if level == "UNKNOWN":
-            level = (
-                "CRITICAL"
-                if score < 50
-                else "HIGH"
-                if score < 75
-                else "MEDIUM"
-                if score < 90
-                else "LOW"
-            )
+            level = "CRITICAL" if score < 50 else "HIGH" if score < 75 else "MEDIUM" if score < 90 else "LOW"
 
         details = generate_penalty_details(result)
 
@@ -605,12 +533,8 @@ async def get_asn_score(
             },
             "signals": {
                 "hygiene": {
-                    "rpki_invalid_percent": float(
-                        result["rpki_invalid_percent"] or 0
-                    ),
-                    "rpki_unknown_percent": float(
-                        result["rpki_unknown_percent"] or 0
-                    ),
+                    "rpki_invalid_percent": float(result["rpki_invalid_percent"] or 0),
+                    "rpki_unknown_percent": float(result["rpki_unknown_percent"] or 0),
                     "has_route_leaks": result["has_route_leaks"] or False,
                     "has_bogon_ads": result["has_bogon_ads"] or False,
                     "is_stub_but_transit": result["is_stub_but_transit"] or False,
@@ -618,84 +542,90 @@ async def get_asn_score(
                 },
                 "threats": {
                     "spamhaus_listed": result["spamhaus_listed"] or False,
-                    "spam_emission_rate": float(
-                        result["spam_emission_rate"] or 0
-                    ),
+                    "spam_emission_rate": float(result["spam_emission_rate"] or 0),
                     "botnet_c2_count": result["botnet_c2_count"] or 0,
                     "phishing_hosting_count": result["phishing_hosting_count"] or 0,
-                    "malware_distribution_count": result["malware_distribution_count"]
-                    or 0,
+                    "malware_distribution_count": result["malware_distribution_count"] or 0,
                 },
                 "metadata": {
-                    "has_peeringdb_profile": result["has_peeringdb_profile"]
-                    or False,
+                    "has_peeringdb_profile": result["has_peeringdb_profile"] or False,
                     "upstream_tier1_count": result["upstream_tier1_count"] or 0,
                     "is_whois_private": result["is_whois_private"] or False,
                 },
                 "forensics": {
                     "ddos_blackhole_count": result.get("ddos_blackhole_count") or 0,
-                    "excessive_prepending_count": result.get(
-                        "excessive_prepending_count"
-                    )
-                    or 0,
+                    "excessive_prepending_count": result.get("excessive_prepending_count") or 0,
                 },
             },
             "details": [d.model_dump() for d in details],
         }
 
         try:
-            await redis_client.setex(cache_key, CACHE_TTL, json.dumps(response_data))
+            await redis_client.setex(cache_key, settings.cache_ttl, json.dumps(response_data))
         except Exception as e:
-            logger.error("cache_write_error asn=%s error=%s", asn, e)
+            logger.error("cache_write_error", extra={"asn": asn, "error": str(e)})
 
         etag = _stable_etag(response_data["last_updated"])
         response.headers["ETag"] = etag
-        response.headers["Cache-Control"] = f"public, max-age={CACHE_TTL}"
+        response.headers["Cache-Control"] = f"public, max-age={settings.cache_ttl}"
 
         return response_data
 
 
-@app.get(
-    "/v1/asn/{asn}/history", response_model=List[HistoryPoint], tags=["Analytics"]
-)
+@app.get("/v1/asn/{asn}/history", response_model=PaginatedHistory, tags=["Analytics"])
 async def get_asn_history(
     asn: int,
     days: int = 30,
+    offset: int = 0,
+    limit: int = 200,
     api_key: str = Depends(get_api_key),
 ):
     """
-    **Get the historical score trend for charting.**
-    Requires API Key.
+    **Get the historical score trend with pagination.**
 
     Parameters:
-    * `days`: Number of days of history to retrieve (default: 30, max: 365)
+    * `days`: Number of days of history (default: 30, max: 365)
+    * `offset`: Skip first N records (default: 0)
+    * `limit`: Max records to return (default: 200, max: 1000)
     """
     _validate_asn(asn)
     days = min(days, 365)
+    limit = min(limit, 1000)
+    offset = max(offset, 0)
 
-    query = """
-    SELECT
-        timestamp,
-        score
+    count_query = """
+    SELECT count(*)
     FROM asn_score_history
-    WHERE asn = %(asn)s
-    ORDER BY timestamp DESC
-    LIMIT %(limit)s
+    WHERE asn = %(asn)s AND timestamp > now() - INTERVAL %(days)s DAY
     """
-    params = {"asn": asn, "limit": days * 24}
+    data_query = """
+    SELECT timestamp, score
+    FROM asn_score_history
+    WHERE asn = %(asn)s AND timestamp > now() - INTERVAL %(days)s DAY
+    ORDER BY timestamp DESC
+    LIMIT %(limit)s OFFSET %(offset)s
+    """
+    params = {"asn": asn, "days": days, "limit": limit, "offset": offset}
+
     try:
-        data = ch_client.execute(query, params)
-        return [{"timestamp": str(ts), "score": int(score)} for ts, score in data]
+        total = ch_client.execute(count_query, {"asn": asn, "days": days})[0][0]
+        data = ch_client.execute(data_query, params)
+        return {
+            "asn": asn,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "data": [{"timestamp": str(ts), "score": int(score)} for ts, score in data],
+        }
     except Exception as e:
-        logger.error("history_query_error asn=%s error=%s", asn, e)
-        return []
+        logger.error("history_query_error", extra={"asn": asn, "error": str(e)})
+        return {"asn": asn, "total": 0, "offset": offset, "limit": limit, "data": []}
 
 
 @app.post("/v1/whitelist", tags=["System"])
-async def add_to_whitelist(
-    req: WhitelistRequest, api_key: str = Depends(get_api_key)
-):
-    """Whitelist an ASN to exclude it from risk scoring. Requires API Key."""
+async def add_to_whitelist(req: WhitelistRequest, request: Request, api_key: str = Depends(get_api_key)):
+    """Whitelist an ASN to exclude it from risk scoring."""
+    trace_id = getattr(request.state, "trace_id", "")
     try:
         with pg_engine.connect() as conn:
             conn.execute(
@@ -707,22 +637,20 @@ async def add_to_whitelist(
                 {"asn": req.asn, "reason": req.reason},
             )
             conn.commit()
-        logger.info("whitelist_add asn=%s reason=%s", req.asn, req.reason)
+
+        # Invalidate cache for this ASN
+        await redis_client.delete(f"score:v3:{req.asn}")
+
+        logger.info("whitelist_add", extra={"asn": req.asn, "reason": req.reason, "trace_id": trace_id})
         return {"status": "success", "message": f"ASN {req.asn} added to whitelist."}
     except Exception as e:
-        logger.error("whitelist_error asn=%s error=%s", req.asn, e)
+        logger.error("whitelist_error", extra={"asn": req.asn, "error": str(e), "trace_id": trace_id})
         raise HTTPException(status_code=500, detail="Failed to update whitelist")
 
 
 @app.post("/v1/tools/bulk-risk-check", tags=["Scoring"])
-async def bulk_risk_check(
-    req: BulkAnalysisRequest, api_key: str = Depends(get_api_key)
-):
-    """
-    **Bulk check multiple ASNs at once.**
-    Useful for Supply Chain Risk analysis.
-    Returns current known scores. Does not trigger new scoring for speed.
-    """
+async def bulk_risk_check(req: BulkAnalysisRequest, api_key: str = Depends(get_api_key)):
+    """Bulk check multiple ASNs at once. Max 1000 ASNs per request."""
     if len(req.asns) > 1000:
         raise HTTPException(status_code=400, detail="Max 1000 ASNs per request")
 
@@ -740,38 +668,16 @@ async def bulk_risk_check(
         for asn_id in req.asns:
             if asn_id in row_map:
                 r = row_map[asn_id]
-                results.append(
-                    {
-                        "asn": asn_id,
-                        "score": r["total_score"],
-                        "level": r["risk_level"],
-                        "name": r["name"],
-                    }
-                )
+                results.append({"asn": asn_id, "score": r["total_score"], "level": r["risk_level"], "name": r["name"]})
             else:
-                results.append(
-                    {
-                        "asn": asn_id,
-                        "score": None,
-                        "level": "UNKNOWN",
-                        "name": "Unknown",
-                    }
-                )
+                results.append({"asn": asn_id, "score": None, "level": "UNKNOWN", "name": "Unknown"})
 
-    return {"results": results}
+    return {"results": results, "total": len(results)}
 
 
-@app.get(
-    "/v1/asn/{asn}/upstreams",
-    response_model=PeerPressureResponse,
-    tags=["Scoring"],
-)
+@app.get("/v1/asn/{asn}/upstreams", response_model=PeerPressureResponse, tags=["Scoring"])
 async def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
-    """
-    **"Peer Pressure" Analysis: Upstream Risk Assessment**
-
-    Evaluates the risk of the ASN's upstream providers.
-    """
+    """Upstream Risk Assessment - evaluates the risk of upstream providers."""
     _validate_asn(asn)
 
     query_upstreams = """
@@ -783,18 +689,13 @@ async def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
     try:
         upstreams_raw = ch_client.execute(query_upstreams, {"asn": asn})
     except Exception as e:
-        logger.error("upstream_query_error asn=%s error=%s", asn, e)
+        logger.error("upstream_query_error", extra={"asn": asn, "error": str(e)})
         raise HTTPException(status_code=500, detail="Metrics database unavailable")
 
     upstream_ids = [u[0] for u in upstreams_raw]
 
     if not upstream_ids:
-        return {
-            "asn": asn,
-            "risk_score": 0,
-            "avg_upstream_score": 0,
-            "upstreams": [],
-        }
+        return {"asn": asn, "risk_score": 0, "avg_upstream_score": 0, "upstreams": []}
 
     upstreams_data = []
     with pg_engine.connect() as conn:
@@ -804,9 +705,7 @@ async def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
         my_score = my_score_res[0] if my_score_res else 0
 
         res = conn.execute(
-            text(
-                "SELECT asn, name, total_score, risk_level FROM asn_registry WHERE asn = ANY(:asns)"
-            ),
+            text("SELECT asn, name, total_score, risk_level FROM asn_registry WHERE asn = ANY(:asns)"),
             {"asns": upstream_ids},
         ).mappings().fetchall()
 
@@ -817,40 +716,31 @@ async def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
             u_asn, count = u_row
             if u_asn in score_map:
                 r = score_map[u_asn]
-                upstreams_data.append(
-                    {
-                        "asn": u_asn,
-                        "name": r["name"],
-                        "score": r["total_score"],
-                        "risk_level": r["risk_level"],
-                        "connection_count": count,
-                    }
-                )
+                upstreams_data.append({"asn": u_asn, "name": r["name"], "score": r["total_score"], "risk_level": r["risk_level"], "connection_count": count})
                 total_ups_score += r["total_score"]
             else:
-                upstreams_data.append(
-                    {
-                        "asn": u_asn,
-                        "name": "Unknown",
-                        "score": 50,
-                        "risk_level": "UNKNOWN",
-                        "connection_count": count,
-                    }
-                )
+                upstreams_data.append({"asn": u_asn, "name": "Unknown", "score": 50, "risk_level": "UNKNOWN", "connection_count": count})
                 total_ups_score += 50
 
     avg_score = int(total_ups_score / len(upstreams_data)) if upstreams_data else 0
-
-    return {
-        "asn": asn,
-        "risk_score": my_score,
-        "avg_upstream_score": avg_score,
-        "upstreams": upstreams_data,
-    }
+    return {"asn": asn, "risk_score": my_score, "avg_upstream_score": avg_score, "upstreams": upstreams_data}
 
 
-# --- Backward compatibility redirects ---
-# Keep old routes working during migration to /v1/
+# =====================================================================
+# CACHE INVALIDATION ENDPOINT (internal, used by scorer)
+# =====================================================================
+
+
+@app.delete("/v1/internal/cache/{asn}", tags=["System"], include_in_schema=False)
+async def invalidate_cache(asn: int, api_key: str = Depends(get_api_key)):
+    """Called by the scoring engine after score updates to bust stale cache."""
+    deleted = await redis_client.delete(f"score:v3:{asn}")
+    return {"invalidated": bool(deleted)}
+
+
+# =====================================================================
+# BACKWARD COMPATIBILITY (hidden from docs)
+# =====================================================================
 
 
 @app.get("/asn/{asn}", response_model=RiskScoreResponse, tags=["Scoring"], include_in_schema=False)
@@ -858,14 +748,14 @@ async def get_asn_score_compat(asn: int, response: Response, request: Request, a
     return await get_asn_score(asn, response, request, api_key)
 
 
-@app.get("/asn/{asn}/history", response_model=List[HistoryPoint], tags=["Analytics"], include_in_schema=False)
-async def get_asn_history_compat(asn: int, days: int = 30, api_key: str = Depends(get_api_key)):
-    return await get_asn_history(asn, days, api_key)
+@app.get("/asn/{asn}/history", tags=["Analytics"], include_in_schema=False)
+async def get_asn_history_compat(asn: int, days: int = 30, offset: int = 0, limit: int = 200, api_key: str = Depends(get_api_key)):
+    return await get_asn_history(asn, days, offset, limit, api_key)
 
 
 @app.post("/whitelist", tags=["System"], include_in_schema=False)
-async def add_to_whitelist_compat(req: WhitelistRequest, api_key: str = Depends(get_api_key)):
-    return await add_to_whitelist(req, api_key)
+async def add_to_whitelist_compat(req: WhitelistRequest, request: Request, api_key: str = Depends(get_api_key)):
+    return await add_to_whitelist(req, request, api_key)
 
 
 @app.post("/tools/bulk-risk-check", tags=["Scoring"], include_in_schema=False)
