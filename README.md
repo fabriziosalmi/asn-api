@@ -3,41 +3,38 @@
 > **Real-time trust scoring for Internet Autonomous Systems using BGP telemetry, threat intelligence, and network topology analysis**
 
 [![License](https://img.shields.io/badge/license-Non--Commercial-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
+[![CI](https://github.com/fabriziosalmi/asn-api/actions/workflows/ci.yml/badge.svg)](https://github.com/fabriziosalmi/asn-api/actions)
 
 ## Overview
 
 The ASN Risk Intelligence Platform is a production-grade system for assessing the security and stability risk of Autonomous Systems (ASNs) on the Internet. By combining real-time BGP routing data, threat intelligence feeds, and sophisticated network topology analysis, it generates comprehensive risk scores (0-100) that help organizations make informed decisions about network trust.
 
 **Key Capabilities:**
--  **Real-time BGP Analysis** - Process hundreds of BGP updates per second from RIPE RIS live streams
-- ️ **Multi-source Threat Intelligence** - Integrate Spamhaus, URLhaus, PhishTank, and other feeds
--  **Advanced Scoring Engine** - 30+ signals across hygiene, threats, stability, and forensics
--  **Historical Tracking** - 365-day score history with trend analysis
--  **Topology Analysis** - Upstream/downstream risk assessment and peer pressure analysis
--  **Production-Ready** - Enterprise-grade REST API with caching, rate limiting, and monitoring
-
-### Current Statistics
-
-- **1,519 ASNs** actively scored and monitored
-- **2.3M+ BGP events** processed in time-series database
-- **43K+ historical scores** tracked for trend analysis
-- **183 threat events** detected and correlated
+- **Real-time BGP Analysis** - Process hundreds of BGP updates per second from RIPE RIS live streams
+- **Multi-source Threat Intelligence** - Integrate Spamhaus, URLhaus, and other feeds
+- **Advanced Scoring Engine** - 30+ signals across hygiene, threats, stability, and forensics
+- **Historical Tracking** - 365-day score history with trend analysis and pagination
+- **Topology Analysis** - Upstream/downstream risk assessment and peer pressure analysis
+- **Production-Ready** - Async API with caching, rate limiting, structured logging, and monitoring
 
 ## Quick Start
 
 ### Prerequisites
-- Docker 20.10+ and Docker Compose 1.29+
+- Docker 20.10+ and Docker Compose v2+
 - 8GB RAM minimum (16GB recommended)
 - 50GB disk space for time-series data
 
 ### Launch the Platform
 
 ```bash
-# Clone the repository
 git clone https://github.com/fabriziosalmi/asn-api.git
 cd asn-api
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your credentials (POSTGRES_PASSWORD, API_SECRET_KEY, etc.)
 
 # Start all services
 docker-compose up --build
@@ -47,8 +44,8 @@ Wait 2-3 minutes for initial data ingestion and database initialization. Then ac
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| API Documentation | http://localhost/api/docs | API Key: `dev-secret` |
-| Grafana Dashboards | http://localhost/dashboard/ | admin / ${POSTGRES_PASSWORD} |
+| API Documentation | http://localhost/api/docs | API Key from `.env` |
+| Grafana Dashboards | http://localhost/dashboard/ | admin / `$GRAFANA_ADMIN_PASSWORD` |
 | VitePress Docs | http://localhost:5173 | (from docs/ dir) |
 
 ## Architecture
@@ -60,141 +57,92 @@ Internet --> Nginx (80) --> api (8000) --> PostgreSQL (State)
              |          --> grafana (3000)
              |
 BGP Stream --> ingestor --> ClickHouse (History) <-- engine (Worker)
+                                                       |
+                                                    Redis (Cache + Queue)
 ```
 
 ### Technology Stack
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| **API Gateway** | FastAPI | High-performance REST API with OpenAPI docs |
-| **Task Queue** | Celery + Redis | Asynchronous scoring and batch processing |
-| **State Database** | PostgreSQL 15 | Current scores, metadata, and signals |
-| **Time-Series DB** | ClickHouse | High-volume BGP events and historical data |
-| **Caching Layer** | Redis 7 | API response caching and rate limiting |
+| **API Gateway** | FastAPI + async Redis | REST API with validated config (Pydantic Settings) |
+| **Task Queue** | Celery + Redis | Asynchronous scoring with correlation ID tracing |
+| **State Database** | PostgreSQL 15 | Current scores, metadata, signals (with Alembic migrations) |
+| **Time-Series DB** | ClickHouse | High-volume BGP events with TTL retention policies |
+| **Caching Layer** | Redis 7 | API response caching, atomic rate limiting (Lua) |
 | **Visualization** | Grafana | Real-time dashboards and monitoring |
 | **Documentation** | VitePress | Interactive API documentation |
-
-## Features
-
-### Core Capabilities
-
-####  Risk Scoring
-- **Comprehensive Analysis** - 30+ signals across 4 categories (Hygiene, Threats, Stability, Forensics)
-- **Real-time Scoring** - Sub-500ms scoring latency per ASN
-- **Percentile Ranking** - Global comparative analysis across 1,519+ monitored ASNs
-- **Historical Tracking** - 365-day score history with trend visualization
-
-####  Intelligence Sources
-- **BGP Telemetry** - Live RIPE RIS stream processing (100-200 updates/sec)
-- **RPKI Validation** - ROA validation for route origin authentication
-- **Threat Feeds** - Spamhaus DROP/EDROP, URLhaus, PhishTank integration
-- **Network Metadata** - PeeringDB enrichment, WHOIS analysis
-
-####  Advanced Analytics
-- **Downstream Risk** - "Downstream Risk Algorithm" algorithm for customer risk assessment
-- **Upstream Analysis** - "Upstream Risk Evaluation" evaluation of transit providers
-- **Zombie Detection** - Identification of inactive/parked ASNs
-- **BGP Forensics** - DDoS sponge detection, AS path prepending analysis
-- **Predictive Stability** - ML-based instability prediction using statistical analysis
-
-####  Security Features
-- **API Key Authentication** - Secure access control with configurable keys
-- **Rate Limiting** - RFC-compliant rate limit headers (`X-RateLimit-*`)
-- **HTTPS Ready** - Production deployment with TLS/SSL support
-- **Whitelist Management** - User-managed ASN exclusion lists
-
-####  Monitoring & Observability
-- **Grafana Dashboards** - 4 pre-built dashboards for monitoring
-  - Mission Control: Real-time BGP activity and threat detection
-  - System Health: Ingestion rates and database metrics
-  - Network Topology: AS connections and top active ASNs
-  - API Performance: Request rate, latency, cache hit rate
-- **Request Logging** - ClickHouse-based API analytics
-- **Cache Metrics** - Redis cache effectiveness tracking
 
 ## API Reference
 
 ### Authentication
 
-All API endpoints require an API key passed via the `X-API-Key` header:
+All API endpoints require an API key passed via the `X-API-Key` header.
+
+### Endpoints (v1)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/v1/asn/{asn}` | Detailed risk score card |
+| `GET` | `/v1/asn/{asn}/history?days=30&offset=0&limit=200` | Paginated score history |
+| `GET` | `/v1/asn/{asn}/upstreams` | Upstream risk analysis |
+| `POST` | `/v1/tools/bulk-risk-check` | Bulk analysis (max 1000 ASNs) |
+| `POST` | `/v1/whitelist` | Add ASN to whitelist |
+| `GET` | `/health` | Health check (no auth) |
+| `GET` | `/docs` | Swagger UI |
+| `GET` | `/redoc` | ReDoc |
+
+Legacy routes without `/v1/` prefix are supported for backward compatibility but hidden from docs.
+
+### Example
 
 ```bash
 # Get ASN risk score
-curl -H "X-API-Key: dev-secret" http://localhost/api/asn/15169
+curl -H "X-API-Key: $API_KEY" http://localhost/api/v1/asn/15169
 
-# Score history (last 30 days)
-curl -H "X-API-Key: dev-secret" http://localhost/api/asn/15169/history
+# Paginated history (last 7 days, 50 records)
+curl -H "X-API-Key: $API_KEY" "http://localhost/api/v1/asn/15169/history?days=7&limit=50"
 
 # Bulk analysis
-curl -X POST -H "X-API-Key: dev-secret" -H "Content-Type: application/json" \
-  -d '{"asns": [15169, 13335, 3356]}' http://localhost/api/tools/bulk-risk-check
+curl -X POST -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"asns": [15169, 13335, 3356]}' http://localhost/api/v1/tools/bulk-risk-check
 ```
 
-### Core Endpoints
+### Response Headers
 
-| Component | Weight | Signals |
-|-----------|--------|---------|
-| **Hygiene** (40%) | RPKI validation, route leaks, bogon advertisements, **Inactive ASNs** (0 prefixes) |
-| **Threats** (35%) | Spamhaus listings, botnet C2, phishing, malware, **WHOIS Entropy** |
-| **Stability** (25%) | BGP churn rate, announcement volatility, **Downstream Risk** (Downstream Risk Algorithm) |
-| **Forensics** (Bonus)| **DDoS Sponge** (Blackholing), **Traffic Chaos** (Prepending), **Space Squatting** |
-| **Enterprise** (Obs) | RFC-Compliant Rate Limiting (`X-RateLimit`), Forensic Dashboards |
+Every response includes:
 
-Retrieve detailed risk assessment for a specific ASN:
+| Header | Description |
+|--------|-------------|
+| `X-Trace-ID` | Distributed tracing correlation ID |
+| `X-RateLimit-Limit` | Rate limit ceiling |
+| `X-RateLimit-Remaining` | Remaining requests in window |
+| `X-RateLimit-Reset` | Window reset timestamp |
+| `X-Response-Time` | Server processing time |
+| `ETag` | Stable SHA256-based cache validation |
 
-```bash
-curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169
+### Error Responses
+
+All errors use a structured envelope:
+
+```json
+{
+  "error": "ASN not found or not yet scored",
+  "code": "HTTP_404",
+  "request_id": "1711700400-a1b2c3d4"
+}
 ```
 
-Access Grafana at http://localhost/dashboard/ (admin / ${POSTGRES_PASSWORD}):
+### Input Validation
 
-#### Get Score History
-
-Retrieve historical score trend for charting:
-
-```bash
-curl -H "X-API-Key: dev-secret" "http://localhost:8080/asn/15169/history?days=30"
-```
-
-#### Upstream Risk Analysis
-
-Evaluate the risk of an ASN's upstream providers:
-
-```bash
-curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169/upstreams
-```
-
-#### Bulk Risk Check
-
-Analyze multiple ASNs in a single request (useful for supply chain analysis):
-
-```bash
-curl -X POST -H "X-API-Key: dev-secret" \
-  -H "Content-Type: application/json" \
-  -d '{"asns": [15169, 13335, 3356]}' \
-  http://localhost:8080/tools/bulk-risk-check
-```
-
-#### Whitelist Management
-
-Add an ASN to the whitelist (score set to 100):
-
-```bash
-curl -X POST -H "X-API-Key: dev-secret" \
-  -H "Content-Type: application/json" \
-  -d '{"asn": 15169, "reason": "Corporate network"}' \
-  http://localhost:8080/whitelist
-```
-
-### API Documentation
-
-Interactive API documentation with examples is available at:
-- **Swagger UI**: http://localhost:8080/docs
-- **ReDoc**: http://localhost:8080/redoc
+- ASN range: 1 - 4,294,967,295 (32-bit)
+- History days: 1 - 365
+- Bulk check: max 1000 ASNs per request
+- Whitelist reason: 1 - 500 characters
 
 ## Scoring Methodology
 
-The platform uses a sophisticated multi-factor scoring model that analyzes 30+ signals across four main categories. The final score ranges from 0 (critical risk) to 100 (trusted).
+The platform uses a multi-factor scoring model analyzing 30+ signals across four categories. Final score ranges from 0 (critical risk) to 100 (trusted).
 
 ### Scoring Categories
 
@@ -207,35 +155,34 @@ The platform uses a sophisticated multi-factor scoring model that analyzes 30+ s
 
 ### Signal Breakdown
 
-####  Routing Hygiene (40%)
-- **RPKI Validation** - Invalid ROA status detection (-20 points)
-- **Route Leaks** - Valley-free violation detection (-20 points)
-- **Bogon Advertisement** - Reserved/private prefix announcements (-10 points)
-- **Prefix Granularity** - De-aggregation and fragmentation analysis (-10 points)
-- **Inactive ASNs** - Active registration with zero routes (-15 points)
+**Routing Hygiene (40%)**
+- RPKI Invalid ROA status (-20 points)
+- Valley-free violation / route leaks (-20 points)
+- Bogon/reserved prefix advertisements (-10 points)
+- Prefix de-aggregation / fragmentation (-10 points)
+- Zombie ASN: active registration, zero routes (-15 points)
 
-#### ️ Threat Intelligence (35%)
-- **Spamhaus Listings** - DROP/EDROP list membership (-30 points)
-- **Spam Emission** - High spam bot activity rate (-15 points)
-- **Botnet C2 Hosting** - Command & control server presence (-20 per C2, cap at -40)
-- **Phishing Infrastructure** - Hosting phishing domains (-15 points)
-- **Malware Distribution** - Active malware hosting (-20 points)
-- **Threat Recidivism** - Persistent malicious activity over 30 days (-10 points)
-- **WHOIS Entropy** - Algorithmically generated organization names (-10 points)
+**Threat Intelligence (35%)**
+- Spamhaus DROP/EDROP listing (-30 points)
+- High spam emission rate (-15 points)
+- Botnet C2 hosting (-20 per C2, cap -40)
+- Phishing infrastructure (-15 points)
+- Malware distribution (-20 points)
+- Threat recidivism over 30 days (-10 points)
+- WHOIS entropy (generated names) (-10 points)
 
-#### Network Stability (25%)
-- **Upstream Churn** - Frequent provider changes (>2 in 90 days: -25 points)
-- **Route Flapping** - High withdrawal rates (>100/week: -5 points)
-- **Predictive Instability** - ML-based stability forecast (-15 points)
-- **PeeringDB Profile** - Presence in PeeringDB (+5 bonus)
-- **Tier-1 Connectivity** - Multiple Tier-1 upstreams (+5 bonus)
-- **Bad Neighborhood** - Low-scoring upstreams (-5 to -15 points)
+**Network Stability (25%)**
+- Upstream churn >2 providers/90d (-25 points)
+- Route flapping >100 withdrawals/week (-5 points)
+- Predictive instability (statistical analysis) (-15 points)
+- PeeringDB profile present (+5 bonus)
+- Multiple Tier-1 upstreams (+5 bonus)
+- Bad neighborhood (low-scoring upstreams) (-5 to -15 points)
 
-####  Forensic Signals (Bonus/Penalty)
-- **Downstream Risk** - "Downstream Risk Algorithm" customer analysis (-20 points if avg <70)
-- **DDoS Sponge** - Blackhole community tagging frequency (-15 points)
-- **Traffic Engineering Chaos** - Excessive AS path prepending (-10 points)
-- **Space Squatting** - RIR allocation validation
+**Forensic Signals (Bonus/Penalty)**
+- Toxic downstream clientele (-20 points if avg <70)
+- DDoS sponge / blackhole community tagging (-15 points)
+- Traffic engineering chaos / excessive prepending (-10 points)
 
 ### Risk Levels
 
@@ -246,247 +193,90 @@ The platform uses a sophisticated multi-factor scoring model that analyzes 30+ s
 | **50-74** | HIGH | Significant concerns, use with caution |
 | **0-49** | CRITICAL | High-risk network, avoid if possible |
 
-### Scoring Algorithm
+## Configuration
 
-The scoring engine follows this workflow:
+All services use validated configuration via Pydantic Settings. Copy `.env.example` to `.env` and fill in your values:
 
-1. **Signal Collection** - Fetch static signals from PostgreSQL and temporal metrics from ClickHouse
-2. **Whitelist Check** - Bypass scoring for whitelisted ASNs (score = 100)
-3. **Penalty Application** - Apply point deductions based on detected issues
-4. **Bonus Application** - Add points for positive indicators
-5. **Topology Analysis** - Evaluate upstream/downstream risk
-6. **Score Normalization** - Clamp final score to 0-100 range
-7. **Persistence** - Store in PostgreSQL and append to ClickHouse history
-
-## Dashboards & Visualization
-
-Access Grafana at http://localhost:3000 (default: admin/admin) for real-time monitoring:
-
-### Available Dashboards
-
-#### 1. Mission Control
-**Purpose**: High-level operational overview
-- Real-time BGP activity monitoring
-- Threat detection alerts
-- Risk distribution across monitored ASNs
-- Top offenders and most improved ASNs
-
-#### 2. System Health
-**Purpose**: Platform performance and reliability
-- Data ingestion rates (BGP updates/sec)
-- Scoring throughput and latency
-- Database query performance
-- Memory and CPU utilization
-
-#### 3. Network Topology
-**Purpose**: Internet topology analysis
-- AS relationship graph
-- Top active ASNs by announcement volume
-- Upstream/downstream connectivity patterns
-- Geographic distribution
-
-#### 4. API Performance
-**Purpose**: API metrics and usage patterns
-- **Request Rate** - Real-time req/s monitoring
-- **Latency Percentiles** - P50, P95, P99 response times
-- **Cache Effectiveness** - Hit rate percentage and hit/miss breakdown
-- **Error Tracking** - 4xx/5xx error counts (5-minute window)
-- **Endpoint Analysis** - Most requested endpoints with average latency
-- **Status Code Distribution** - Visual breakdown of HTTP responses
-
-### Dashboard Data Sources
-
-- **PostgreSQL** - Current scores and metadata
-- **ClickHouse** - Historical data, BGP events, API logs
-- **Redis** - Cache metrics (via API instrumentation)
-
-### Custom Dashboards
-
-To create custom dashboards, use the pre-provisioned datasources:
-- `asn-postgres` - PostgreSQL connection
-- `asn-clickhouse` - ClickHouse connection
-
-Grafana automatically installs the ClickHouse plugin on startup.
-
-## Documentation
-
-Comprehensive documentation is available:
-
-### Online Documentation
-- **GitHub Pages**: https://fabriziosalmi.github.io/asn-api/
-
-Automatically deployed from the `main` branch using GitHub Actions.
-
-### Local Development
 ```bash
-cd docs && npm install && npm run dev
+cp .env.example .env
 ```
 
-Then visit http://localhost:5173 for:
-- API reference with examples
-- Architecture deep-dive
-- Field reference
-- Integration guides
+### Required Variables
+
+| Variable | Description |
+|----------|-------------|
+| `POSTGRES_USER` | PostgreSQL username |
+| `POSTGRES_PASSWORD` | PostgreSQL password |
+| `API_SECRET_KEY` | API authentication key (use `openssl rand -hex 32`) |
+
+### Optional Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CACHE_TTL` | 60 | API cache duration (seconds) |
+| `API_RATE_LIMIT` | 100 | Requests per minute per IP |
+| `CORS_ORIGINS` | * | Comma-separated allowed origins |
+| `LOG_FORMAT` | json | Log format: `json` or `text` |
+| `LOG_LEVEL` | INFO | Log level |
+| `DB_POOL_SIZE` | 20 | PostgreSQL connection pool size |
+| `DB_MAX_OVERFLOW` | 10 | Max pool overflow connections |
+
+See `.env.example` for the complete list.
 
 ## Data Architecture
 
 ### PostgreSQL (State Database)
 
-**Purpose**: Current state, identity, and computed scores
+Tables: `asn_registry`, `asn_signals`, `asn_whitelist`
 
-#### Tables
+Indexes on: `total_score`, `risk_level`, `last_scored_at`, `asn_signals.asn`, `asn_whitelist.asn`
 
-**`asn_registry`** - Primary registry of monitored ASNs
-- Current scores (total, hygiene, threat, stability)
-- Metadata (name, country, registry)
-- Downstream and WHOIS entropy scores
-- Last update timestamp
-
-**`asn_signals`** - Detailed signal metrics (30+ fields)
-- RPKI validation percentages
-- Threat intelligence flags
-- Identity indicators (PeeringDB, WHOIS)
-- Forensic signals (DDoS, prepending)
-
-**`asn_whitelist`** - User-managed exclusion list
-- Whitelisted ASNs with justification
-- Auto-score of 100 for trusted networks
+Schema managed via **Alembic** migrations (`services/api/migrations/`). For existing databases: `alembic stamp 001_baseline`. For new databases: `alembic upgrade head`.
 
 ### ClickHouse (Time-Series Database)
 
-**Purpose**: High-volume event storage and historical analysis
+Tables: `bgp_events`, `threat_events`, `asn_score_history`, `daily_metrics`, `forensic_metrics`, `api_requests`
 
-#### Tables
+Materialized views for real-time aggregation: `bgp_daily_mv`, `threat_daily_mv`, `forensic_prepending_mv`
 
-**`bgp_events`** - Raw BGP routing updates (2.3M+ records)
-- Announcements and withdrawals
-- AS paths and communities
-- Upstream relationships
-- Partitioned by month for efficient queries
+### Data Retention (TTL)
 
-**`threat_events`** - Threat intelligence correlations
-- Multi-source threat data (Spamhaus, URLhaus, PhishTank)
-- Categorized by type (spam, C2, malware, phishing)
-- IP-level attribution to ASNs
-
-**`asn_score_history`** - Historical score tracking (43K+ records)
-- Daily score snapshots for 365-day retention
-- Powers trend analysis and charting
-
-**`daily_metrics`** - Pre-aggregated statistics
-- Daily BGP event counts
-- Announce/withdraw ratios
-- Materialized views for real-time aggregation
-
-**`api_requests`** - API usage analytics
-- Request timestamps and endpoints
-- Response times and status codes
-- Cache hit/miss tracking
-- Client IP logging
-
-### Data Retention Policy
-
-| Data Type | Retention Period | Storage |
-|-----------|-----------------|---------|
-| BGP Events | 30 days | ClickHouse (partitioned) |
-| Threat Events | 90 days | ClickHouse |
+| Data Type | Retention | Storage |
+|-----------|-----------|---------|
+| BGP Events | 90 days | ClickHouse (partitioned) |
+| Threat Events | 180 days | ClickHouse |
+| API Request Logs | 30 days | ClickHouse |
 | Score History | 365 days | ClickHouse |
 | Daily Metrics | Indefinite | ClickHouse (aggregated) |
 | Current Scores | Persistent | PostgreSQL |
-| API Logs | 90 days | ClickHouse |
 
-## Configuration
+## Docker
 
-### Environment Variables
+### Multi-stage Builds
 
-Key configuration options in `docker-compose.yml`:
+All service Dockerfiles use multi-stage builds for smaller images and run as non-root `appuser`.
 
-#### Security
-```yaml
-API_SECRET_KEY: dev-secret          # Change in production! Use openssl rand -hex 32
-POSTGRES_PASSWORD: secure_password  # Database authentication
-CLICKHOUSE_PASSWORD: ""             # ClickHouse authentication
-```
+### Health Checks
 
-#### Database Connectivity
-```yaml
-DB_HOST: db-metadata                # PostgreSQL host
-CLICKHOUSE_HOST: db-timeseries      # ClickHouse host
-REDIS_HOST: broker-cache            # Redis host
-```
+Every container has a health check:
 
-#### Performance Tuning
-```yaml
-CACHE_TTL: 60                       # API cache duration (seconds)
-API_RATE_LIMIT: 100                 # Requests per minute per IP
-```
+| Service | Health Check |
+|---------|-------------|
+| PostgreSQL | `pg_isready` |
+| ClickHouse | `wget /ping` |
+| Redis | `redis-cli ping` |
+| API | `GET /health` |
+| Engine | `celery inspect ping` |
+| Ingestor | ClickHouse connectivity |
 
-#### Data Ingestion
-```yaml
-RIPE_RIS_ENABLED: true              # Enable live BGP stream
-THREAT_FEED_INTERVAL: 3600          # Threat intel refresh (seconds)
-```
+### Redis Configuration
 
-### Production Configuration
+Redis runs with `maxmemory 256mb` and `allkeys-lru` eviction policy to prevent OOM.
 
-For production deployments, use environment-specific configuration:
+### Scaling
 
-**Method 1: .env file**
-```bash
-# Create .env file in project root
-echo "API_SECRET_KEY=$(openssl rand -hex 32)" > .env
-echo "POSTGRES_PASSWORD=$(openssl rand -base64 32)" >> .env
-```
-
-**Method 2: docker-compose.override.yml**
-```yaml
-version: '3.8'
-services:
-  asn-api:
-    environment:
-      - API_SECRET_KEY=${API_SECRET_KEY}
-      - CACHE_TTL=300  # 5 minutes for production
-```
-
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for comprehensive production deployment guidance.
-
-## Performance Characteristics
-
-### Throughput Metrics
-
-| Metric | Specification | Notes |
-|--------|--------------|-------|
-| **BGP Ingestion Rate** | 100-200 updates/sec | From RIPE RIS live stream |
-| **Scoring Latency** | <500ms per ASN | Including all 30+ signals |
-| **API Response Time** | <100ms (cached) | PostgreSQL + Redis caching |
-| **API Response Time** | <250ms (uncached) | Full database query |
-| **Bulk Analysis** | <5s for 100 ASNs | Parallel query optimization |
-
-### Resource Requirements
-
-#### Minimum (Development)
-- **CPU**: 4 cores
-- **RAM**: 8GB
-- **Disk**: 20GB SSD
-- **Network**: 10 Mbps
-
-#### Recommended (Production)
-- **CPU**: 8+ cores
-- **RAM**: 16GB+
-- **Disk**: 100GB+ SSD (NVMe preferred)
-- **Network**: 100 Mbps+
-
-### Scalability
-
-The platform is designed for horizontal scaling:
-
-**API Layer**
 ```bash
 docker-compose up -d --scale asn-api=3
-```
-
-**Scoring Workers**
-```bash
 docker-compose up -d --scale asn-engine=5
 ```
 
@@ -494,429 +284,164 @@ For Kubernetes deployment, see [KUBERNETES.md](./KUBERNETES.md).
 
 ## Development
 
-### Local Development Setup
+### Setup
 
 ```bash
-# Clone repository
 git clone https://github.com/fabriziosalmi/asn-api.git
 cd asn-api
 
+# Install pre-commit hooks
+pip install pre-commit
+pre-commit install
+
 # Start services
 docker-compose up --build
-
-# View logs
-docker-compose logs -f asn-ingestor
-docker-compose logs -f asn-engine
-docker-compose logs -f asn-api
-```
-
-### Service Management
-
-```bash
-# Restart specific service
-docker-compose restart asn-api
-
-# Rebuild and restart
-docker-compose up -d --build asn-engine
-
-# Stop all services
-docker-compose down
-
-# Remove volumes (clean slate)
-docker-compose down -v
-```
-
-### Database Access
-
-#### PostgreSQL
-```bash
-# Connect to PostgreSQL
-docker-compose exec db-metadata psql -U asn_admin -d asn_registry
-
-# Example queries
-SELECT asn, name, total_score, risk_level FROM asn_registry ORDER BY total_score DESC LIMIT 10;
-SELECT * FROM asn_signals WHERE asn = 15169;
-```
-
-#### ClickHouse
-```bash
-# Connect to ClickHouse
-docker-compose exec db-timeseries clickhouse-client
-
-# Example queries
-SELECT count() FROM bgp_events WHERE timestamp > now() - INTERVAL 1 HOUR;
-SELECT asn, count() as events FROM bgp_events GROUP BY asn ORDER BY events DESC LIMIT 10;
-```
-
-#### Redis
-```bash
-# Connect to Redis
-docker-compose exec broker-cache redis-cli
-
-# Check cached scores
-KEYS score:v2:*
-GET score:v2:15169
 ```
 
 ### Testing
 
-#### Run Test Suite
 ```bash
-# Install test dependencies
 pip install -r services/api/requirements.txt
-pip install pytest pytest-asyncio httpx
+pip install -r services/engine/requirements.txt
+pip install pytest httpx starlette
 
-# Run all tests
 pytest tests/ -v
-
-# Run specific test file
-pytest tests/test_api.py -v
-
-# Run with coverage
-pytest --cov=services tests/
 ```
 
-#### Manual API Testing
+### Load Testing
+
 ```bash
-# Health check
-curl http://localhost:8080/health
-
-# Get ASN score
-curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169
-
-# Check API documentation
-open http://localhost:8080/docs
+pip install locust
+locust -f tests/load/locustfile.py --host http://localhost:8080
 ```
+
+See `tests/load/README.md` for performance targets and headless CI mode.
 
 ### Code Quality
 
-#### Linting
 ```bash
-# Install linters
-pip install ruff black
+# Pre-commit runs ruff + black + security checks automatically
+pre-commit run --all-files
 
-# Run ruff
+# Manual
 ruff check .
-
-# Run black
 black --check .
-
-# Auto-fix with black
-black .
 ```
 
-#### CI/CD Pipeline
+### CI/CD
 
-The project includes GitLab CI configuration (`.gitlab-ci.yml`) with three stages:
-1. **Lint** - Code style and quality checks
-2. **Test** - Unit and integration tests
-3. **Build** - Docker image building and registry push
+**GitHub Actions** (`.github/workflows/ci.yml`):
+1. **Lint** - ruff + black
+2. **Test** - Python 3.11 + 3.12 matrix
+3. **Security** - pip-audit on all requirements
+4. **Load Test** - Locust syntax validation (main branch)
+
+**GitLab CI** (`.gitlab-ci.yml`):
+1. **Lint** - ruff + black
+2. **Test** - pytest with service dependencies
+3. **Security** - pip-audit
+4. **Build** - Docker image build and registry push
 
 ### Project Structure
 
 ```
 asn-api/
-├── services/
-│   ├── api/              # FastAPI REST API
-│   │   ├── main.py       # API routes and endpoints
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   ├── engine/           # Celery scoring worker
-│   │   ├── scorer.py     # Risk scoring algorithm
-│   │   ├── tasks.py      # Celery task definitions
-│   │   └── Dockerfile
-│   ├── ingestor/         # BGP stream consumer
-│   │   ├── start_ingestion_stream.py
-│   │   └── Dockerfile
-│   ├── dashboard/        # Grafana dashboards
-│   │   ├── provisioning/
-│   │   └── dashboards/
-│   ├── db-metadata/      # PostgreSQL initialization
-│   │   └── init.sql
-│   └── db-timeseries/    # ClickHouse initialization
-│       └── init.sql
-├── docs/                 # VitePress documentation
-│   ├── api/             # API reference
-│   ├── architecture/    # System design docs
-│   ├── guide/           # User guides
-│   └── .vitepress/      # VitePress config
-├── tests/               # Test suite
-│   ├── test_api.py
-│   └── test_scorer.py
-├── scripts/             # Utility scripts
-├── docker-compose.yml   # Service orchestration
-├── .gitlab-ci.yml       # CI/CD pipeline
-├── DEPLOYMENT.md        # Production deployment guide
-├── KUBERNETES.md        # Kubernetes deployment guide
-└── README.md           # This file
+  services/
+    api/
+      main.py              # FastAPI routes and middleware
+      api_settings.py       # Pydantic Settings (validated config)
+      alembic.ini           # Alembic configuration
+      migrations/           # Database migrations
+      Dockerfile            # Multi-stage, non-root
+    engine/
+      scorer.py             # Risk scoring algorithm (30+ signals)
+      tasks.py              # Celery tasks with correlation IDs
+      engine_settings.py    # Pydantic Settings
+      Dockerfile
+    ingestor/
+      start_ingestion_stream.py  # RIPE RIS + threat intel
+      Dockerfile
+    dashboard/              # Grafana dashboards
+    db-metadata/init.sql    # PostgreSQL schema + indexes
+    db-timeseries/init.sql  # ClickHouse schema + TTL policies
+  tests/
+    test_api.py             # 12 API tests
+    test_scorer.py          # 2 scorer tests
+    load/locustfile.py      # Load tests
+  docs/                     # VitePress documentation
+  docker-compose.yml        # 9-service orchestration
+  .env.example              # All configuration variables
+  .pre-commit-config.yaml   # ruff, black, security hooks
+  .github/workflows/ci.yml  # GitHub Actions (matrix)
+  .gitlab-ci.yml            # GitLab CI
 ```
 
-## Documentation
+## Observability
 
-Comprehensive documentation is available in multiple formats:
+### Structured JSON Logging
 
-### Online Documentation (GitHub Pages)
+All services emit structured JSON logs (configurable via `LOG_FORMAT`):
 
-**Live Documentation**: https://fabriziosalmi.github.io/asn-api/
-
-The documentation is automatically deployed to GitHub Pages when changes are pushed to the `main` branch. It includes:
-- **API Reference** - Detailed endpoint documentation with examples
-- **Architecture** - Deep-dive into system design and data flow
-- **Field Reference** - Complete signal and metric definitions
-- **Configuration Guide** - Environment setup and tuning
-- **Integration Guides** - How to integrate with external systems
-
-### Local Documentation Development (VitePress)
-
-```bash
-cd docs
-npm install
-npm run dev
+```json
+{"timestamp": "2026-03-29T10:15:00", "name": "asn_api", "level": "INFO", "message": "scoring_complete", "asn": 15169, "score": 95, "level": "LOW"}
 ```
 
-Then visit http://localhost:5173 for local development and testing of documentation changes.
+### Distributed Tracing
 
-### API Documentation (OpenAPI/Swagger)
+Every request gets a `X-Trace-ID` that propagates from the API through Celery tasks to the scoring engine, enabling end-to-end request tracing across services.
 
-- **Swagger UI**: http://localhost:8080/docs - Interactive API testing
-- **ReDoc**: http://localhost:8080/redoc - Clean API reference
+### Grafana Dashboards
 
-### Additional Documentation Files
+4 pre-built dashboards at http://localhost/dashboard/:
+1. **Mission Control** - Real-time BGP activity and threat detection
+2. **System Health** - Ingestion rates and database metrics
+3. **Network Topology** - AS connections and top active ASNs
+4. **API Performance** - Request rate, latency percentiles, cache hit rate
 
-- [DEPLOYMENT.md](./DEPLOYMENT.md) - Production deployment checklist
-- [KUBERNETES.md](./KUBERNETES.md) - Kubernetes deployment guide
-- [RATELIMIT.md](./RATELIMIT.md) - Rate limiting strategy and implementation
-- [CHANGELOG.md](./CHANGELOG.md) - Version history and feature releases
+### Cache Invalidation
 
-## Use Cases
+The scoring engine automatically invalidates Redis cache entries after score updates. The API cache key (`score:v3:{asn}`) is deleted when the engine recalculates a score, ensuring clients always see fresh data within one scoring cycle.
 
-### 1. Supply Chain Risk Assessment
-Evaluate the security posture of third-party networks and service providers:
-```bash
-curl -X POST -H "X-API-Key: dev-secret" \
-  -H "Content-Type: application/json" \
-  -d '{"asns": [13335, 15169, 8075]}' \
-  http://localhost:8080/tools/bulk-risk-check
-```
-
-### 2. Peering Decision Support
-Assess potential peering partners before establishing BGP sessions:
-```bash
-# Get detailed risk profile
-curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/3356
-
-# Check upstream dependencies
-curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/3356/upstreams
-```
-
-### 3. Network Monitoring
-Track your own ASN's risk score over time:
-```bash
-# Current score
-curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/<your-asn>
-
-# Historical trend
-curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/<your-asn>/history?days=90
-```
-
-### 4. Security Operations
-Identify high-risk ASNs for enhanced monitoring or blocking:
-```bash
-# Query PostgreSQL for critical ASNs
-docker-compose exec db-metadata psql -U asn_admin -d asn_registry \
-  -c "SELECT asn, name, total_score FROM asn_registry WHERE risk_level = 'CRITICAL' ORDER BY total_score;"
-```
-
-### 5. Research & Analysis
-Export data for academic research or security analysis:
-```bash
-# Export score history from ClickHouse
-docker-compose exec db-timeseries clickhouse-client --query \
-  "SELECT * FROM asn_score_history WHERE asn = 15169 FORMAT CSV" > asn_15169_history.csv
-```
-
-## Troubleshooting
-
-### Common Issues
-
-#### Services Not Starting
-```bash
-# Check service status
-docker-compose ps
-
-# View logs for failed service
-docker-compose logs <service-name>
-
-# Restart with fresh state
-docker-compose down -v
-docker-compose up --build
-```
-
-#### No BGP Data Ingesting
-```bash
-# Check ingestor logs
-docker-compose logs -f asn-ingestor
-
-# Verify ClickHouse connectivity
-docker-compose exec asn-ingestor ping db-timeseries
-
-# Check RIPE RIS stream status
-curl https://ris-live.ripe.net/v1/stream/
-```
-
-#### High Memory Usage
-```bash
-# Check container resource usage
-docker stats
-
-# Adjust ClickHouse memory limit in docker-compose.yml
-services:
-  db-timeseries:
-    environment:
-      - CLICKHOUSE_MAX_MEMORY_USAGE=4000000000
-```
-
-#### Slow API Responses
-```bash
-# Check PostgreSQL query performance
-docker-compose exec db-metadata psql -U asn_admin -d asn_registry \
-  -c "SELECT * FROM pg_stat_statements ORDER BY total_time DESC LIMIT 10;"
-
-# Verify Redis cache is working
-docker-compose exec broker-cache redis-cli INFO stats
-
-# Check API logs for cache hit rate
-docker-compose logs asn-api | grep "cache_hit"
-```
-
-#### Database Connection Errors
-```bash
-# Ensure databases are healthy
-docker-compose ps
-
-# Wait for health checks
-docker-compose exec db-metadata pg_isready
-docker-compose exec db-timeseries wget -q -O- localhost:8123/ping
-
-# Restart dependent services
-docker-compose restart asn-api asn-engine
-```
-
-### Getting Help
-
-1. Check the [CHANGELOG.md](./CHANGELOG.md) for known issues
-2. Review logs: `docker-compose logs <service>`
-3. Verify configuration in `docker-compose.yml`
-4. Consult documentation in [docs/](./docs/)
-
-## Security Considerations
+## Security
 
 ### Production Hardening
 
-1. **Change Default Credentials**
-   ```bash
-   # Generate strong API key
-   openssl rand -hex 32
-   
-   # Generate database passwords
-   openssl rand -base64 32
-   ```
+1. **Generate strong credentials** - `openssl rand -hex 32` for API key and passwords
+2. **Enable HTTPS** - Use reverse proxy with TLS certificates (see [DEPLOYMENT.md](./DEPLOYMENT.md))
+3. **Restrict network access** - Databases on internal Docker network only
+4. **Audit dependencies** - `pip-audit` runs in CI on every push
+5. **Pre-commit hooks** - Detect private keys and secrets before commit
+6. **Non-root containers** - All services run as unprivileged `appuser`
+7. **No hardcoded defaults** - Required credentials fail-fast if missing from environment
 
-2. **Enable HTTPS**
-   - Use reverse proxy (Nginx/Traefik) with TLS certificates
-   - See [DEPLOYMENT.md](./DEPLOYMENT.md) for Nginx configuration
+### CORS
 
-3. **Restrict Network Access**
-   - Use firewall rules to limit exposed ports
-   - Deploy databases in private networks
-   - Use VPN for administrative access
+Configurable via `CORS_ORIGINS` environment variable. Default: `*` (all origins). Set to specific domains in production.
 
-4. **Regular Updates**
-   ```bash
-   # Update Docker images
-   docker-compose pull
-   docker-compose up -d
-   ```
+### Rate Limiting
 
-5. **Backup Strategy**
-   - Automated daily backups of PostgreSQL and ClickHouse
-   - See [DEPLOYMENT.md](./DEPLOYMENT.md) for backup scripts
+Atomic rate limiting via Redis Lua script. Configurable per-IP limit with RFC-compliant headers (`X-RateLimit-*`, `Retry-After`).
 
-6. **Monitoring**
-   - Set up alerts for API errors, high memory usage, and failed services
-   - Use Grafana dashboards for proactive monitoring
+## Documentation
 
-## Roadmap
+- **GitHub Pages**: https://fabriziosalmi.github.io/asn-api/
+- **Swagger UI**: http://localhost:8080/docs
+- **ReDoc**: http://localhost:8080/redoc
+- **Local VitePress**: `cd docs && npm install && npm run dev`
 
-### Planned Features
+### Additional Files
 
-- [ ] **Machine Learning Integration** - Anomaly detection for BGP events
-- [ ] **Real-time Alerts** - Webhook notifications for score changes
-- [ ] **Multi-tenant Support** - Organization-level access control
-- [ ] **Custom Scoring Profiles** - User-defined weights and thresholds
-- [ ] **Historical Comparison** - Score diff view for time periods
-- [ ] **Geolocation Analysis** - Country/region risk aggregation
-- [ ] **API v2** - GraphQL endpoint for flexible queries
-- [ ] **Mobile Dashboard** - Responsive Grafana views
-
-### Recently Completed
-
-- [x] **Phase 5: BGP Forensics** - DDoS sponge and prepending detection
-- [x] **Phase 4: Advanced Intelligence** - Downstream risk, zombie detection, WHOIS entropy
-- [x] **Phase 3: Production Readiness** - Automated tests, CI/CD, rate limiting
-- [x] **Phase 2: Intelligence Features** - Topology visualization, route leaks, predictive stability
-- [x] **Phase 1: MVP** - Core scoring, API authentication, historical tracking
-
-See [CHANGELOG.md](./CHANGELOG.md) for detailed version history.
-
-## Contributing
-
-Contributions are welcome! Please follow these guidelines:
-
-1. **Fork the repository** and create a feature branch
-2. **Follow existing code style** - Run `black` and `ruff` before committing
-3. **Write tests** for new features
-4. **Update documentation** as needed
-5. **Submit a pull request** with a clear description
-
-### Development Workflow
-
-```bash
-# Create feature branch
-git checkout -b feature/amazing-feature
-
-# Make changes and test
-docker-compose up --build
-pytest tests/ -v
-
-# Format code
-black .
-ruff check --fix .
-
-# Commit and push
-git add .
-git commit -m "Add amazing feature"
-git push origin feature/amazing-feature
-```
+- [DEPLOYMENT.md](./DEPLOYMENT.md) - Production deployment checklist
+- [KUBERNETES.md](./KUBERNETES.md) - Kubernetes deployment guide
+- [RATELIMIT.md](./RATELIMIT.md) - Rate limiting strategy
+- [CHANGELOG.md](./CHANGELOG.md) - Version history
 
 ## License
 
 **Non-Commercial Use License**
 
-This software is licensed under a custom non-commercial license that allows you to:
-- ✅ Clone and use the software for personal, educational, or research purposes
-- ✅ Modify and customize the software to suit your needs
-- ✅ Distribute copies and create derivative works
+This software is licensed under a custom non-commercial license. See the [LICENSE](LICENSE) file for complete terms and conditions. For commercial licensing inquiries, contact the repository owner through GitHub.
 
-However, **commercial use is strictly prohibited** without prior written consent from Fabrizio Salmi, the repository owner. This includes selling the software, using it in commercial products or services, or monetizing access to its functionality.
-
-For commercial licensing inquiries or to request permission for commercial use, please contact the repository owner through GitHub or open an issue.
-
-See the [LICENSE](LICENSE) file for complete terms and conditions.
-
----
-
-<<<<<<< HEAD
 ## Acknowledgments
 
 - **RIPE NCC** - BGP data via RIPE RIS live stream
@@ -927,9 +452,6 @@ See the [LICENSE](LICENSE) file for complete terms and conditions.
 
 ---
 
-**Last Updated**: January 2026  
-**Version**: 1.0.0  
-**Platform Status**: Production Ready
-=======
 **Last Updated**: March 2026
->>>>>>> f18971a (feat: [Phase 6] Enterprise security and ingestion overhaul)
+**Version**: 7.2.0
+**Platform Status**: Production Ready
