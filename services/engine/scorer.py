@@ -393,20 +393,25 @@ class RiskScorer:
             ddos_bh = metrics.get("ddos_blackhole_count", 0)
             excessive_prepend = metrics.get("excessive_prepending_count", 0)
 
+        # Clamp component scores: base is 100, penalties subtract — floor at 0, cap at 100
+        hygiene_score = max(0, min(100, 100 + breakdown["hygiene"]))
+        threat_score = max(0, min(100, 100 + breakdown["threat"]))
+        stability_score = max(0, min(100, 100 + breakdown["stability"]))
+
         with self.pg_engine.connect() as conn:
             conn.execute(
                 text("""
                 UPDATE asn_registry
-                SET total_score = :score, hygiene_score = 100 + :h, threat_score = 100 + :t,
-                    stability_score = 100 + :s, risk_level = :risk_level,
+                SET total_score = :score, hygiene_score = :h, threat_score = :t,
+                    stability_score = :s, risk_level = :risk_level,
                     downstream_score = :ds, last_scored_at = :now
                 WHERE asn = :asn
             """),
                 {
                     "score": score,
-                    "h": breakdown["hygiene"],
-                    "t": breakdown["threat"],
-                    "s": breakdown["stability"],
+                    "h": hygiene_score,
+                    "t": threat_score,
+                    "s": stability_score,
                     "risk_level": risk_level,
                     "ds": downstream_score,
                     "now": timestamp,

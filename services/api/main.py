@@ -4,7 +4,6 @@ import json
 import time
 import orjson
 import httpx
-import socket
 import dns.asyncresolver
 import ipaddress
 import hashlib
@@ -16,14 +15,13 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Security, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect
-from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 from fastapi.responses import ORJSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from clickhouse_driver import Client
 from typing import List, Optional, Dict
@@ -42,6 +40,9 @@ settings = Settings()
 # Used for super-fast reads before asking Redis (L2)
 # Max 5,000 items, TTL is set dynamically during insertion based on settings.cache_ttl
 l1_cache = TTLCache(maxsize=5000, ttl=settings.cache_ttl)
+
+# --- Background task registry (keeps create_task references alive) ---
+_bg_tasks: set = set()
 
 # --- Structured JSON Logging ---
 _log_handler = logging.StreamHandler()
@@ -419,7 +420,9 @@ async def request_middleware(request: Request, call_next):
             except Exception as exc:
                 logger.warning("ch_request_log_failed", extra={"error": str(exc)})
 
-        asyncio.create_task(_log_to_ch())
+        _task = asyncio.create_task(_log_to_ch())
+        _bg_tasks.add(_task)
+        _task.add_done_callback(_bg_tasks.discard)
 
     return response
 
@@ -458,11 +461,7 @@ async def health_check():
             health["dependencies"]["postgres"] = "up"
         await _ch_execute("SELECT 1")
         health["dependencies"]["clickhouse"] = "up"
-        import redis as sync_redis
-
-        sync_r = sync_redis.Redis(host=settings.redis_host, port=6379, socket_timeout=1)
-        sync_r.ping()
-        sync_r.close()
+        await redis_client.ping()
         health["dependencies"]["redis"] = "up"
     except Exception as e:
         health["status"] = "degraded"
@@ -805,12 +804,17 @@ async def get_asn_history(
     days = min(days, 365)
     limit = min(limit, 1000)
     offset = max(offset, 0)
+    if offset > 100_000:
+        raise HTTPException(status_code=400, detail="offset too large (max 100000)")
 
     count_query = """
     SELECT count(*)
     FROM asn_score_history
     WHERE asn = %(asn)s AND timestamp > now() - INTERVAL %(days)s DAY
     """
+    # Use a cursor-based WHERE clause to avoid expensive OFFSET scans.
+    # The data is already ordered (asn, timestamp) by the MergeTree key;
+    # an explicit ORDER BY DESC is still needed to return newest-first.
     data_query = """
     SELECT timestamp, score
     FROM asn_score_history
@@ -1047,7 +1051,10 @@ async def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
 @app.delete("/v1/internal/cache/{asn}", tags=["System"], include_in_schema=False)
 async def invalidate_cache(asn: int, api_key: str = Depends(get_api_key)):
     """Called by the scoring engine after score updates to bust stale cache."""
-    deleted = await redis_client.delete(f"score:v3:{asn}")
+    cache_key = f"score:v3:{asn}"
+    # Evict from both L1 (in-process) and L2 (Redis) to prevent stale reads
+    l1_cache.pop(cache_key, None)
+    deleted = await redis_client.delete(cache_key)
     return {"invalidated": bool(deleted)}
 
 

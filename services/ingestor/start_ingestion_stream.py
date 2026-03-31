@@ -3,6 +3,7 @@
 import asyncio
 import os
 import random
+import threading
 import time
 import json
 import logging
@@ -33,12 +34,21 @@ class DataIngestor:
         self.ch_client = Client(
             host=CLICKHOUSE_HOST, user=CLICKHOUSE_USER, password=CLICKHOUSE_PASSWORD
         )
+        # clickhouse-driver Client is NOT thread-safe; protect all execute() calls
+        self._ch_lock = threading.Lock()
         self.redis_client = redis.Redis.from_url(REDIS_URL)
         self.celery_app = Celery("ingestor", broker=REDIS_URL)
         self.running = True
 
         # Test ASNs to simulate traffic for
         self.watched_asns = [15169, 2914, 174, 3356, 12345, 666, 9999, 45102]
+
+    def _ch_execute_sync(self, query: str, params=None):
+        """Thread-safe wrapper around ch_client.execute()."""
+        with self._ch_lock:
+            if params is not None:
+                return self.ch_client.execute(query, params)
+            return self.ch_client.execute(query)
 
     async def connect_ripe_ris(self) -> None:
         """Connects to RIPE RIS Live WebSocket to process REAL BGP updates."""
@@ -136,7 +146,7 @@ class DataIngestor:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
-                lambda b=batch: self.ch_client.execute(
+                lambda b=batch: self._ch_execute_sync(
                     "INSERT INTO bgp_events (timestamp, asn, prefix, event_type, upstream_as, path, community) VALUES",
                     b,
                 ),
@@ -195,7 +205,7 @@ class DataIngestor:
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(
                     None,
-                    lambda te=threat_event: self.ch_client.execute(
+                    lambda te=threat_event: self._ch_execute_sync(
                         "INSERT INTO threat_events (timestamp, asn, source, category, target_ip, description) VALUES",
                         te,
                     ),
@@ -285,7 +295,7 @@ class DataIngestor:
                 GROUP BY prefix
                 """
                 active_routes = await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: self.ch_client.execute(query)
+                    None, lambda: self._ch_execute_sync(query)
                 )
 
                 logger.info(
@@ -337,7 +347,7 @@ class DataIngestor:
                             _loop = asyncio.get_running_loop()
                             _fut = _loop.run_in_executor(
                                 None,
-                                lambda te=threat_event: self.ch_client.execute(
+                                lambda te=threat_event: self._ch_execute_sync(
                                     "INSERT INTO threat_events (timestamp, asn, source, category, target_ip, description) VALUES",
                                     te,
                                 ),
@@ -377,7 +387,7 @@ class DataIngestor:
                 LIMIT 50
                 """
                 rows = await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: self.ch_client.execute(query)
+                    None, lambda: self._ch_execute_sync(query)
                 )
 
                 if rows:
@@ -422,7 +432,7 @@ class DataIngestor:
                   AND event_type = 'announce'
                 """
                 rows = await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: self.ch_client.execute(query)
+                    None, lambda: self._ch_execute_sync(query)
                 )
 
                 leaks_found = 0
@@ -481,7 +491,7 @@ class DataIngestor:
         logger.info("ingestor_starting")
         while True:
             try:
-                self.ch_client.execute("SELECT 1")
+                self._ch_execute_sync("SELECT 1")
                 self.redis_client.ping()
                 logger.info("dependencies_online")
                 break
