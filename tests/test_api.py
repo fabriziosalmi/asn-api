@@ -103,7 +103,7 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
 def test_compare_asns_success(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
     mock_conn = mock_pg_conn
     
     mock_conn.execute.return_value.mappings.return_value.fetchall.return_value = [
@@ -118,7 +118,7 @@ def test_compare_asns_success(client, api_key, mock_dependencies):
     assert data["comparison"]["score_diff"] == 40
 
 def test_compare_asns_missing(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
     mock_conn = mock_pg_conn
     mock_conn.execute.return_value.mappings.return_value.fetchall.return_value = []
 
@@ -126,7 +126,7 @@ def test_compare_asns_missing(client, api_key, mock_dependencies):
     assert response.status_code == 404
 
 def test_get_edl_feed(client, mock_dependencies):
-    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
     mock_conn = mock_pg_conn
     
     mock_conn.execute.return_value.fetchall.return_value = [(123,), (456,)]
@@ -138,7 +138,7 @@ def test_get_edl_feed(client, mock_dependencies):
 
 @patch("api.main.httpx.AsyncClient")
 def test_peeringdb_info(mock_client_cls, client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
     mock_conn = mock_pg_conn
     mock_redis.get.return_value = None 
     
@@ -160,7 +160,7 @@ def test_peeringdb_info(mock_client_cls, client, api_key, mock_dependencies):
 
 @patch("api.main.dns.asyncresolver.resolve", new_callable=AsyncMock)
 def test_domain_risk(mock_resolve, client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
     mock_conn = mock_pg_conn
     
     mock_answer_a = MagicMock()
@@ -194,7 +194,7 @@ def test_websocket_auth_fail(client):
 
 def test_websocket_stream_receives_message(client, api_key, mock_dependencies):
     """Producer publishes one message; consumer forwards it then connection closes."""
-    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
 
     message_sent = {"type": "message", "data": '{"asn":1234,"score":42}'}
     sentinel = {"type": "message", "data": None}        # marks end of iteration
@@ -220,7 +220,7 @@ def test_websocket_stream_receives_message(client, api_key, mock_dependencies):
 
 def test_websocket_queue_overflow_disconnects_client(client, api_key, mock_dependencies):
     """If pubsub floods faster than the client reads, the engine emits close(1008)."""
-    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
 
     OVERFLOW = 101  # one more than QUEUE_MAX=100
 
@@ -246,7 +246,7 @@ def test_websocket_queue_overflow_disconnects_client(client, api_key, mock_depen
 
 
 def test_get_asn_score_success(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
     mock_conn = mock_pg_conn
     mock_redis.get.return_value = None  # Bypass cache
     
@@ -274,15 +274,15 @@ def test_get_asn_score_success(client, api_key, mock_dependencies):
     assert data["risk_score"] == 95
 
 def test_get_asn_history_success(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
     mock_conn = mock_pg_conn
-    
-    # Mock clickhouse response: 1st call is count, 2nd is data
-    mock_ch.execute.side_effect = [
-        [[2]],  # Return value for count_query
-        [("2023-01-01T00:00:00Z", 90), ("2023-01-02T00:00:00Z", 95)]  # Return value for data_query
+
+    # _ch_execute is called twice: first for count, then for rows.
+    mock_ch_execute.side_effect = [
+        [[2]],
+        [("2023-01-01T00:00:00Z", 90), ("2023-01-02T00:00:00Z", 95)],
     ]
-    
+
     response = client.get("/v1/asn/15169/history", headers={"X-API-Key": api_key})
     assert response.status_code == 200
     data = response.json()
@@ -290,7 +290,7 @@ def test_get_asn_history_success(client, api_key, mock_dependencies):
     assert len(data["data"]) == 2
 
 def test_add_to_whitelist(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
     mock_conn = mock_pg_conn
     
     response = client.post("/v1/whitelist", json={"asn": 12345, "reason": "Trusted ISP"}, headers={"X-API-Key": api_key})

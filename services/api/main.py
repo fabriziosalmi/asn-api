@@ -68,6 +68,19 @@ ch_client = Client(
     user=settings.clickhouse_user,
     password=settings.clickhouse_password,
 )
+# Dedicated thread pool for ClickHouse (clickhouse-driver is sync-only).
+# All CH calls MUST go through _ch_execute() so exceptions surface instead of
+# being silently swallowed by fire-and-forget executors.
+_ch_pool = __import__('concurrent.futures', fromlist=['ThreadPoolExecutor']).ThreadPoolExecutor(
+    max_workers=settings.db_pool_size, thread_name_prefix="ch"
+)
+
+async def _ch_execute(query: str, params=None):
+    """Run a sync ClickHouse query in the dedicated thread pool.
+    Raises on error — callers decide whether to propagate or catch."""
+    loop = asyncio.get_running_loop()
+    fn = lambda: ch_client.execute(query, params) if params is not None else ch_client.execute(query)
+    return await loop.run_in_executor(_ch_pool, fn)
 
 # --- Async Redis ---
 redis_client: aioredis.Redis = aioredis.Redis(
@@ -366,31 +379,34 @@ async def request_middleware(request: Request, call_next):
     response.headers["X-RateLimit-Reset"] = str(int(time.time()) + window)
     response.headers["X-Trace-ID"] = trace_id
 
-    # Async ClickHouse logging (fire-and-forget)
+    # Async ClickHouse request logging (fire-and-forget with error logging)
     endpoint = request.url.path
     if endpoint.startswith("/v1/asn"):
         cache_hit = getattr(request.state, "cache_hit", False)
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(
-            None,
-            lambda: ch_client.execute(
-                """INSERT INTO api_requests
-                (timestamp, endpoint, method, status_code, response_time_ms, cache_hit, client_ip, error_message)
-                VALUES""",
-                [
-                    (
-                        datetime.now(),
-                        endpoint,
-                        request.method,
-                        response.status_code,
-                        process_time,
-                        1 if cache_hit else 0,
-                        client_ip,
-                        "",
-                    )
-                ],
-            ),
-        )
+
+        async def _log_to_ch() -> None:
+            try:
+                await _ch_execute(
+                    """INSERT INTO api_requests
+                    (timestamp, endpoint, method, status_code, response_time_ms, cache_hit, client_ip, error_message)
+                    VALUES""",
+                    [
+                        (
+                            datetime.now(),
+                            endpoint,
+                            request.method,
+                            response.status_code,
+                            process_time,
+                            1 if cache_hit else 0,
+                            client_ip,
+                            "",
+                        )
+                    ],
+                )
+            except Exception as exc:
+                logger.warning("ch_request_log_failed", extra={"error": str(exc)})
+
+        asyncio.create_task(_log_to_ch())
 
     return response
 
@@ -427,7 +443,7 @@ async def health_check():
         async with pg_engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
             health["dependencies"]["postgres"] = "up"
-        ch_client.execute("SELECT 1")
+        await _ch_execute("SELECT 1")
         health["dependencies"]["clickhouse"] = "up"
         import redis as sync_redis
 
@@ -757,7 +773,7 @@ async def get_asn_score(
 
 
 @app.get("/v1/asn/{asn}/history", response_model=PaginatedHistory, tags=["Analytics"])
-def get_asn_history(
+async def get_asn_history(
     asn: int,
     days: int = 30,
     offset: int = 0,
@@ -792,8 +808,9 @@ def get_asn_history(
     params = {"asn": asn, "days": days, "limit": limit, "offset": offset}
 
     try:
-        total = ch_client.execute(count_query, {"asn": asn, "days": days})[0][0]
-        data = ch_client.execute(data_query, params)
+        total_res = await _ch_execute(count_query, {"asn": asn, "days": days})
+        total = total_res[0][0]
+        data = await _ch_execute(data_query, params)
         return {
             "asn": asn,
             "total": total,
@@ -803,7 +820,7 @@ def get_asn_history(
         }
     except Exception as e:
         logger.error("history_query_error", extra={"asn": asn, "error": str(e)})
-        return {"asn": asn, "total": 0, "offset": offset, "limit": limit, "data": []}
+        raise HTTPException(status_code=503, detail="Metrics database unavailable")
 
 
 @app.post("/v1/whitelist", tags=["System"])
@@ -945,10 +962,10 @@ async def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
     GROUP BY upstream_as ORDER BY c DESC LIMIT 5
     """
     try:
-        upstreams_raw = ch_client.execute(query_upstreams, {"asn": asn})
+        upstreams_raw = await _ch_execute(query_upstreams, {"asn": asn})
     except Exception as e:
         logger.error("upstream_query_error", extra={"asn": asn, "error": str(e)})
-        raise HTTPException(status_code=500, detail="Metrics database unavailable")
+        raise HTTPException(status_code=503, detail="Metrics database unavailable")
 
     upstream_ids = [u[0] for u in upstreams_raw]
 
@@ -963,16 +980,13 @@ async def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
         my_score_res = result.fetchone()
         my_score = my_score_res[0] if my_score_res else 0
 
-        res = (
-            conn.execute(
-                text(
-                    "SELECT asn, name, total_score, risk_level FROM asn_registry WHERE asn = ANY(:asns)"
-                ),
-                {"asns": upstream_ids},
-            )
-            .mappings()
-            .fetchall()
+        _res = await conn.execute(
+            text(
+                "SELECT asn, name, total_score, risk_level FROM asn_registry WHERE asn = ANY(:asns)"
+            ),
+            {"asns": upstream_ids},
         )
+        res = _res.mappings().fetchall()
 
         score_map = {r["asn"]: r for r in res}
         total_ups_score = 0
@@ -1042,7 +1056,7 @@ async def get_asn_score_compat(
 
 
 @app.get("/asn/{asn}/history", tags=["Analytics"], include_in_schema=False)
-def get_asn_history_compat(
+async def get_asn_history_compat(
     asn: int,
     days: int = 30,
     offset: int = 0,

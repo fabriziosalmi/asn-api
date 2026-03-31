@@ -62,11 +62,16 @@ def mock_dependencies():
 
     mock_ch = MagicMock()
     mock_ch.execute.return_value = MagicMock()
+    # _ch_execute is the async wrapper around the sync ch_client.
+    # Patch it directly so tests don't spin real threads via run_in_executor.
+    mock_ch_execute = AsyncMock(return_value=[])
 
     with patch("api.main.redis_client", mock_redis), patch(
         "api.main.pg_engine", mock_pg
-    ), patch("api.main.ch_client", mock_ch):
-        yield (mock_redis, mock_pg, mock_ch, mock_pg_conn)
+    ), patch("api.main.ch_client", mock_ch), patch(
+        "api.main._ch_execute", mock_ch_execute
+    ):
+        yield (mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute)
 
 
 @pytest.fixture
