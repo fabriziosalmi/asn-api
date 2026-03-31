@@ -37,8 +37,8 @@ Detailed explanation of all response fields and their meanings.
 - **Description**: Composite trust score (higher is better)
 - **Interpretation**:
   - `90-100`: Trusted, minimal risk
-  - `75-89`: Low to moderate risk
-  - `50-74`: Significant concerns
+  - `70-89`: Low to moderate risk
+  - `50-69`: Significant concerns
   - `0-49`: High risk, known issues
 
 ### risk_level
@@ -75,14 +75,11 @@ Detailed explanation of all response fields and their meanings.
 - **Weight**: 40% of total score
 - **Description**: Routing best practices and protocol compliance
 - **Penalties Applied For**:
-  - RPKI invalid routes (`RPKI_INVALID`): -20
-  - High RPKI unknown percentage (`RPKI_UNKNOWN`): -10
+  - RPKI invalid routes (`RPKI_INVALID`): -20 (threshold: > 1%)
   - Route leaks (`ROUTE_LEAK`): -20
   - Bogon advertisements (`BOGON_AD`): -10
-  - Stub-to-transit violations (`STUB_TRANSIT`): -15
-  - Missing PeeringDB profile (`META_NO_PDB`): -5
-  - No Tier-1 upstream (`META_NO_TIER1`): -5
-  - Private/non-routable WHOIS (`META_PRIVATE`): -5
+  - Prefix over-deaggregation (`FRAGMENTATION`): -10 (threshold: granularity_score > 50)
+  - Zombie ASN — registered but zero active routes: -15
 
 ### breakdown.threat
 - **Type**: Integer (0-100)
@@ -91,20 +88,27 @@ Detailed explanation of all response fields and their meanings.
 - **Penalties Applied For**:
   - Spamhaus listing (`THREAT_SPAMHAUS`): -30
   - Botnet C2 hosting (`THREAT_BOTNET`): -20 per host, capped at -40
-  - Phishing domains (`THREAT_PHISHING`): -5 per domain
-  - Malware distribution (`THREAT_MALWARE`): -10 per sample
   - High spam emission rate (`THREAT_SPAM`): -15 (threshold: rate > 0.1)
+  - Persistent threat recidivism: -10 (threshold: > 5 threat events in 30 days)
+  - High WHOIS entropy (obfuscated name): -10 (threshold: entropy > 4.5)
+- **Note**: `phishing_hosting_count` and `malware_distribution_count` appear in the `details` array for visibility but do not directly subtract from this component score.
 
 ### breakdown.stability
 - **Type**: Integer (0-100)
 - **Weight**: 25% of total score
 - **Description**: Operational reliability and BGP behavior
+- **Bonuses Applied For**:
+  - PeeringDB profile present: +5
+  - Direct Tier-1 upstream count > 1: +5
 - **Penalties Applied For**:
-  - High route churn: -25
-  - Withdrawal spikes: -15
-  - Path instability: -10
-  - DDoS blackhole targeting (>5 events/7d): -15
-  - Excessive AS-PATH prepending (>10 events/7d): -10
+  - High upstream churn (> 2 providers in 90 days): -25
+  - Predictive instability (high BGP event variance): -15
+  - Excessive route withdrawals (> 100 in 7 days): -5
+  - Bad neighborhood (avg upstream score < 50): -15
+  - Suspicious upstreams (avg upstream score 50-69): -5
+  - Toxic downstream clientele (avg downstream score < 70): -20
+  - DDoS blackhole targeting (> 5 events in 7 days): -15
+  - Excessive AS-PATH prepending (> 10 events in 7 days): -10
 
 ## Signal Details
 

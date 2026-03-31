@@ -1,6 +1,5 @@
 # Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
 
-import math
 import time
 import urllib.parse
 import logging
@@ -255,15 +254,6 @@ class RiskScorer:
             if not res:
                 return 100.0
             return sum(r[0] for r in res) / len(res)
-
-    def _calculate_whois_entropy(self, input_text: Optional[str]) -> float:
-        if not input_text:
-            return 0.0
-        prob = [
-            float(input_text.count(c)) / len(input_text)
-            for c in dict.fromkeys(list(input_text))
-        ]
-        return -sum(p * math.log(p) / math.log(2.0) for p in prob)
 
     def _apply_scoring_rules(self, s: dict, t: dict) -> tuple[int, dict, list, str]:
         score = 100

@@ -22,7 +22,7 @@ class MockScorer(RiskScorer):
 
 
 def test_score_calculation_high_risk():
-    """spamhaus listed (-30) + rpki_invalid > 1% (-20) => 100 - 50 = 50."""
+    """spamhaus listed (-30) + rpki_invalid > 1% (-20) + peeringdb bonus (+5) => 100 - 45 = 55."""
     scorer = MockScorer()
     signals = {
         "rpki_invalid_percent": 5.0,

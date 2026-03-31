@@ -884,8 +884,8 @@ async def compare_asns(
     Compare two ASNs side-by-side to understand relative risk profiles.
     Returns a delta indicating which ASN is safer across different dimensions.
     """
-    if asn_a <= 0 or asn_a > ASN_MAX or asn_b <= 0 or asn_b > ASN_MAX:
-        raise HTTPException(status_code=400, detail="Invalid ASN number")
+    _validate_asn(asn_a)
+    _validate_asn(asn_b)
 
     query = text("""
         SELECT r.asn, r.name, r.country_code,
@@ -1130,6 +1130,8 @@ async def get_edl_feed(max_score: float = Query(50.0, ge=0.0, le=100.0)):
     except Exception as e:
         logger.error("edl_generation_error", extra={"error": str(e)})
         return PlainTextResponse("", status_code=500)
+
+
 @app.websocket("/v1/stream")
 async def websocket_firehose(websocket: WebSocket, api_key: str = Query(...)):
     """

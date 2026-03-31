@@ -586,16 +586,6 @@ def test_get_asn_score_redis_cache_hit(client, api_key, mock_dependencies):
         "downstream_score": 95,
         "last_updated": "2024-01-15T10:30:00",
         "breakdown": {"hygiene": 99, "threat": 98, "stability": 97},
-        "asn": 15169,
-        "name": "GOOGLE",
-        "country_code": "US",
-        "registry": "arin",
-        "risk_score": 98,
-        "risk_level": "LOW",
-        "rank_percentile": 99.0,
-        "downstream_score": 95,
-        "last_updated": "2024-01-15T10:30:00",
-        "breakdown": {"hygiene": 99, "threat": 98, "stability": 97},
         "signals": {
             "hygiene": {
                 "rpki_invalid_percent": 0.0,
@@ -1052,7 +1042,7 @@ def test_get_asn_score_unknown_risk_becomes_medium(client, api_key, mock_depende
 
     response = client.get("/v1/asn/15169", headers={"X-API-Key": api_key})
     assert response.status_code == 200
-    assert response.json()["risk_level"] in ["MEDIUM", "LOW", "HIGH", "CRITICAL"]  # recalc happened
+    assert response.json()["risk_level"] == "MEDIUM"  # 70 <= 80 < 90 → MEDIUM
 
 
 # ---------------------------------------------------------------------------
@@ -1128,8 +1118,8 @@ def test_get_asn_score_with_total_count_cached(client, api_key, mock_dependencie
 
     # redis.get is called twice: once for score cache, once for stats:asn_total_count
     mock_redis.get.side_effect = [
-        None,   # score cache miss
-        b"80000",  # total_count_cached hit
+        None,      # score cache miss
+        "80000",   # total_count_cached hit (decode_responses=True → str)
     ]
 
     scalar_mock = MagicMock()
