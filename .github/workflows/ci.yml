@@ -45,7 +45,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r services/api/requirements.txt
         pip install -r services/engine/requirements.txt
-        pip install pytest httpx starlette
+        pip install pytest pytest-asyncio anyio httpx starlette
 
     - name: Run tests
       env:

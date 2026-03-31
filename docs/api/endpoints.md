@@ -15,7 +15,7 @@ Retrieve the complete risk profile for an Autonomous System.
 ### Request
 
 ```bash
-curl -H "X-API-Key: $API_KEY" http://localhost:8080/v1/asn/15169
+curl -H "X-API-Key: $API_KEY" http://localhost:80/api/v1/asn/15169
 ```
 
 ### Response

@@ -7,7 +7,7 @@ The API uses API key authentication for all protected endpoints.
 Include the API key in the `X-API-Key` header:
 
 ```bash
-curl -H "X-API-Key: your-api-key" http://localhost:8080/v1/asn/15169
+curl -H "X-API-Key: your-api-key" http://localhost:80/api/v1/asn/15169
 ```
 
 ## Configuration
@@ -55,11 +55,11 @@ The following endpoints do not require authentication:
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /` | Service information |
-| `GET /health` | Health check with dependency status |
-| `GET /docs` | Swagger UI |
-| `GET /redoc` | ReDoc documentation |
-| `GET /openapi.json` | OpenAPI specification |
+| `GET /api/` | Service information |
+| `GET /api/health` | Health check with dependency status |
+| `GET /api/docs` | Swagger UI |
+| `GET /api/redoc` | ReDoc documentation |
+| `GET /api/openapi.json` | OpenAPI specification |
 
 ## Rate Limiting
 

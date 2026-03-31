@@ -89,8 +89,8 @@ All API endpoints require an API key passed via the `X-API-Key` header.
 | `POST` | `/v1/tools/bulk-risk-check` | Bulk analysis (max 1000 ASNs) |
 | `POST` | `/v1/whitelist` | Add ASN to whitelist |
 | `GET` | `/health` | Health check (no auth) |
-| `GET` | `/docs` | Swagger UI |
-| `GET` | `/redoc` | ReDoc |
+| `GET` | `/api/docs` | Swagger UI |
+| `GET` | `/api/redoc` | ReDoc |
 
 Legacy routes without `/v1/` prefix are supported for backward compatibility but hidden from docs.
 
@@ -425,8 +425,8 @@ Atomic rate limiting via Redis Lua script. Configurable per-IP limit with RFC-co
 ## Documentation
 
 - **GitHub Pages**: https://fabriziosalmi.github.io/asn-api/
-- **Swagger UI**: http://localhost:8080/docs
-- **ReDoc**: http://localhost:8080/redoc
+- **Swagger UI**: http://localhost:80/api/docs
+- **ReDoc**: http://localhost:80/api/redoc
 - **Local VitePress**: `cd docs && npm install && npm run dev`
 
 ### Additional Files

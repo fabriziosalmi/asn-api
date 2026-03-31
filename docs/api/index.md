@@ -5,7 +5,7 @@ The ASN Risk API provides RESTful access to risk scores and analytics.
 ## Base URL
 
 ```
-http://localhost:8080
+http://localhost:80/api
 ```
 
 For production deployments, use HTTPS with a reverse proxy.
@@ -15,7 +15,7 @@ For production deployments, use HTTPS with a reverse proxy.
 All scoring endpoints require an API key passed via the `X-API-Key` header.
 
 ```bash
-curl -H "X-API-Key: your-api-key" http://localhost:8080/asn/15169
+curl -H "X-API-Key: your-api-key" http://localhost:80/api/v1/asn/15169
 ```
 
 See [Authentication](./authentication.md) for details.
@@ -71,6 +71,6 @@ X-RateLimit-Reset: 1704067200
 
 Interactive documentation is available at:
 
-- Swagger UI: `http://localhost:8080/docs`
-- ReDoc: `http://localhost:8080/redoc`
-- OpenAPI JSON: `http://localhost:8080/openapi.json`
+- Swagger UI: `http://localhost:80/api/docs`
+- ReDoc: `http://localhost:80/api/redoc`
+- OpenAPI JSON: `http://localhost:80/api/openapi.json`

@@ -25,13 +25,11 @@ Evaluates routing best practices and protocol compliance.
 
 | Signal | Penalty | Description |
 |--------|---------|-------------|
-| RPKI Invalid | -30 | Routes with invalid RPKI status |
-| RPKI Unknown | -10 | Routes without ROA coverage |
-| Route Leaks | -25 | Valley-free routing violations |
-| Bogon Ads | -40 | Advertising reserved/unallocated space |
-| Stub Transit | -20 | Stub ASN acting as transit provider |
-| Inactive ASN | -15 | Registered but silent (0 prefixes) |
-| Space Squatting | -50 | Announcing RIR reserved space |
+| RPKI Invalid | -20 | Routes with invalid RPKI status (>1%) |
+| Route Leaks | -20 | Valley-free routing violations |
+| Bogon Ads | -10 | Advertising reserved/unallocated space |
+| High Fragmentation | -10 | Excessive prefix fragmentation (score >50) |
+| Zombie ASN | -15 | Registered but silent (0 prefixes) |
 
 ## Threat Score (35%)
 
@@ -39,25 +37,28 @@ Measures association with malicious activity.
 
 | Signal | Penalty | Description |
 |--------|---------|-------------|
-| Spamhaus Listed | -50 | Present on DROP/EDROP lists |
-| Botnet C2 | -10/host | Hosting command and control servers |
-| Phishing | -5/domain | Hosting phishing infrastructure |
-| Malware | -10/sample | Distributing malware |
-| High Spam Rate | -20 | Excessive spam emission |
+| Spamhaus Listed | -30 | Present on DROP/EDROP lists |
+| Botnet C2 | -20/host (max -40) | Hosting command and control servers |
+| High Spam Rate | -15 | Excessive spam emission |
 | WHOIS Entropy | -10 | Algorithmically generated Org Name |
+| Persistent Threats | -10 | Repeated threat activity (>5 events in 30d) |
 
 ## Stability Score (25%)
 
 Assesses operational reliability based on historical behavior.
 
-| Signal | Penalty | Description |
-|--------|---------|-------------|
-| High Churn | -20 | Excessive route changes |
-| Withdrawal Spikes | -15 | Abnormal withdrawal patterns |
-| Path Instability | -10 | Frequent AS path changes |
-| Downstream Risk | -20 | Providing transit to low-score ASNs |
-| DDoS Sponge | -15 | Frequently blackholed by upstreams |
-| Traffic Chaos | -10 | Excessive path prepending (>3x) |
+| Signal | Penalty/Bonus | Description |
+|--------|---------------|-------------|
+| High Churn | -25 | >2 upstream changes in 90 days |
+| Predictive Instability | -15 | Statistical analysis flags instability |
+| Route Flapping | -5 | >100 withdrawals in 7 days |
+| Bad Neighborhood | -15 | Avg upstream score < 50 |
+| Suspicious Upstreams | -5 | Avg upstream score 50–69 |
+| Toxic Downstreams | -20 | Avg downstream score < 70 |
+| DDoS Sponge | -15 | >5 blackhole events in 7 days |
+| Traffic Chaos | -10 | >10 excessive prepending events in 7 days |
+| PeeringDB Profile | +5 | Verified peering presence |
+| Tier-1 Upstreams | +5 | Multiple Tier-1 transit providers |
 
 ## Score History
 
