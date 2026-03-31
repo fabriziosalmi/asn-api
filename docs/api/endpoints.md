@@ -99,7 +99,7 @@ Upstream Risk Analysis: evaluates the risk of the ASN's transit providers.
 ### Request
 
 ```bash
-curl -H "X-API-Key: $API_KEY" http://localhost:8080/v1/asn/3333/upstreams
+curl -H "X-API-Key: $API_KEY" http://localhost:80/api/v1/asn/3333/upstreams
 ```
 
 ### Response
@@ -146,7 +146,7 @@ Retrieve paginated historical score data for trend analysis.
 ### Request
 
 ```bash
-curl -H "X-API-Key: $API_KEY" "http://localhost:8080/v1/asn/15169/history?days=7&offset=0&limit=50"
+curl -H "X-API-Key: $API_KEY" "http://localhost:80/api/v1/asn/15169/history?days=7&offset=0&limit=50"
 ```
 
 ### Response
@@ -183,7 +183,7 @@ curl -X POST \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"asns": [15169, 13335, 8075]}' \
-  http://localhost:8080/v1/tools/bulk-risk-check
+  http://localhost:80/api/v1/tools/bulk-risk-check
 ```
 
 ### Response
@@ -212,7 +212,7 @@ curl -X POST \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"asn": 64512, "reason": "Internal network"}' \
-  http://localhost:8080/v1/whitelist
+  http://localhost:80/api/v1/whitelist
 ```
 
 ### Validation
@@ -238,7 +238,7 @@ Health check endpoint. Does not require authentication.
 ### Request
 
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:80/api/health
 ```
 
 ### Response

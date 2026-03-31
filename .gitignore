@@ -45,3 +45,7 @@ IDEAS.md
 *.log
 *.sqlite3
 *.db
+
+# VitePress build output
+docs/.vitepress/dist/
+docs/.vitepress/cache/

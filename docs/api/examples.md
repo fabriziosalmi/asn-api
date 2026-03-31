@@ -7,13 +7,13 @@ Complete working examples for common use cases.
 Query a single ASN:
 
 ```bash
-curl -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169 | jq .
+curl -H "X-API-Key: dev-secret" http://localhost:80/api/v1/asn/15169 | jq .
 ```
 
 With pretty output using jq:
 
 ```bash
-curl -s -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169 | \
+curl -s -H "X-API-Key: dev-secret" http://localhost:80/api/v1/asn/15169 | \
   jq '{asn, name, score: .risk_score, level: .risk_level}'
 ```
 
@@ -33,7 +33,7 @@ Get 7 days of score history:
 
 ```bash
 curl -s -H "X-API-Key: dev-secret" \
-  "http://localhost:8080/asn/15169/history?days=7" | \
+  "http://localhost:80/api/v1/asn/15169/history?days=7" | \
   jq '.[] | "\(.timestamp): \(.score)"'
 ```
 
@@ -54,7 +54,7 @@ curl -s -X POST \
   -H "X-API-Key: dev-secret" \
   -H "Content-Type: application/json" \
   -d '{"asns": [15169, 13335, 3356, 174]}' \
-  http://localhost:8080/tools/bulk-risk-check | \
+  http://localhost:80/api/v1/tools/bulk-risk-check | \
   jq '.results[] | select(.score != null) | "\(.name) (AS\(.asn)): \(.score)/100 - \(.level)"'
 ```
 
@@ -69,7 +69,7 @@ Output:
 Get only threat-related signals:
 
 ```bash
-curl -s -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169 | \
+curl -s -H "X-API-Key: dev-secret" http://localhost:80/api/v1/asn/15169 | \
   jq '.signals.threats'
 ```
 
@@ -93,7 +93,7 @@ curl -s -X POST \
   -H "X-API-Key: dev-secret" \
   -H "Content-Type: application/json" \
   -d '{"asns": [15169, 13335, 3356, 174, 64512]}' \
-  http://localhost:8080/tools/bulk-risk-check | \
+  http://localhost:80/api/v1/tools/bulk-risk-check | \
   jq '.results[] | select(.level == "CRITICAL" or .level == "HIGH")'
 ```
 
@@ -107,7 +107,7 @@ ASN=15169
 PREVIOUS_SCORE=$(cat /tmp/asn_${ASN}_score 2>/dev/null || echo 100)
 
 CURRENT_SCORE=$(curl -s -H "X-API-Key: dev-secret" \
-  http://localhost:8080/asn/${ASN} | jq -r .risk_score)
+  http://localhost:80/api/v1/asn/${ASN} | jq -r .risk_score)
 
 echo "$CURRENT_SCORE" > /tmp/asn_${ASN}_score
 
@@ -129,7 +129,7 @@ curl -s -X POST \
   -H "X-API-Key: dev-secret" \
   -H "Content-Type: application/json" \
   -d "{\"asns\": ${ASN_LIST}}" \
-  http://localhost:8080/tools/bulk-risk-check | \
+  http://localhost:80/api/v1/tools/bulk-risk-check | \
   jq -r '.results[] | select(.score != null) | 
     if .score < 50 then "CRITICAL"
     elif .score < 75 then "HIGH"
@@ -148,7 +148,7 @@ curl -X POST \
   -H "X-API-Key: dev-secret" \
   -H "Content-Type: application/json" \
   -d '{"asn": 64512, "reason": "Private ASN - internal use"}' \
-  http://localhost:8080/whitelist
+  http://localhost:80/api/v1/whitelist
 ```
 
 Response:
@@ -165,18 +165,18 @@ Response:
 import requests
 
 API_KEY = "dev-secret"
-BASE_URL = "http://localhost:8080"
+BASE_URL = "http://localhost:80/api"
 
 def get_asn_risk(asn: int) -> dict:
     headers = {"X-API-Key": API_KEY}
-    response = requests.get(f"{BASE_URL}/asn/{asn}", headers=headers)
+    response = requests.get(f"{BASE_URL}/v1/asn/{asn}", headers=headers)
     response.raise_for_status()
     return response.json()
 
 def bulk_analyze(asn_list: list) -> dict:
     headers = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
     response = requests.post(
-        f"{BASE_URL}/tools/bulk-risk-check",
+        f"{BASE_URL}/v1/tools/bulk-risk-check",
         headers=headers,
         json={"asns": asn_list}
     )
@@ -200,7 +200,7 @@ Create a Grafana panel using the API as a data source:
 
 ```javascript
 // In Grafana, use JSON API datasource
-// URL: http://localhost:8080/asn/15169
+// URL: http://localhost:80/api/v1/asn/15169
 // Headers: X-API-Key: dev-secret
 // JSONPath: $.risk_score
 ```
@@ -210,6 +210,6 @@ Create a Grafana panel using the API as a data source:
 Monitor changes in real-time:
 
 ```bash
-watch -n 60 'curl -s -H "X-API-Key: dev-secret" http://localhost:8080/asn/15169 | \
+watch -n 60 'curl -s -H "X-API-Key: dev-secret" http://localhost:80/api/v1/asn/15169 | \
   jq -r "\(.name): \(.risk_score) (\(.risk_level)) - Updated: \(.last_updated)"'
 ```

@@ -66,7 +66,7 @@ cp .env.example .env
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GRAFANA_ADMIN_PASSWORD` | admin | Grafana admin password |
+| `GRAFANA_ADMIN_PASSWORD` | (required) | Grafana admin password — no default, must be set explicitly |
 
 ## Docker Compose Overrides
 

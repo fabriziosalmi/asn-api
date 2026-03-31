@@ -166,8 +166,6 @@ The platform uses a multi-factor scoring model analyzing 30+ signals across four
 - Spamhaus DROP/EDROP listing (-30 points)
 - High spam emission rate (-15 points)
 - Botnet C2 hosting (-20 per C2, cap -40)
-- Phishing infrastructure (-15 points)
-- Malware distribution (-20 points)
 - Threat recidivism over 30 days (-10 points)
 - WHOIS entropy (generated names) (-10 points)
 
@@ -303,7 +301,7 @@ docker-compose up --build
 ```bash
 pip install -r services/api/requirements.txt
 pip install -r services/engine/requirements.txt
-pip install pytest httpx starlette
+pip install pytest pytest-asyncio anyio httpx starlette
 
 pytest tests/ -v
 ```
@@ -312,7 +310,7 @@ pytest tests/ -v
 
 ```bash
 pip install locust
-locust -f tests/load/locustfile.py --host http://localhost:8080
+locust -f tests/load/locustfile.py --host http://localhost:80/api
 ```
 
 See `tests/load/README.md` for performance targets and headless CI mode.
@@ -365,8 +363,8 @@ asn-api/
     db-metadata/init.sql    # PostgreSQL schema + indexes
     db-timeseries/init.sql  # ClickHouse schema + TTL policies
   tests/
-    test_api.py             # 12 API tests
-    test_scorer.py          # 2 scorer tests
+    test_api.py             # 65 API tests
+    test_scorer.py          # 2 scorer tests (exercise real _apply_scoring_rules)
     load/locustfile.py      # Load tests
   docs/                     # VitePress documentation
   docker-compose.yml        # 9-service orchestration
