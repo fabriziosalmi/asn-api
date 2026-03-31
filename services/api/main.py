@@ -2,15 +2,20 @@
 
 import json
 import time
+import orjson
 import hashlib
+from cachetools import TTLCache
 import logging
 import urllib.parse
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Security, Depends, Request, Response
+from fastapi import FastAPI, HTTPException, Security, Depends, Request, Response, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
+from fastapi.responses import ORJSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
@@ -26,6 +31,11 @@ from api_settings import Settings
 
 # --- Configuration (validated) ---
 settings = Settings()
+
+# --- Local L1 Memory Cache ---
+# Used for super-fast reads before asking Redis (L2)
+# Max 5,000 items, TTL is set dynamically during insertion based on settings.cache_ttl
+l1_cache = TTLCache(maxsize=5000, ttl=settings.cache_ttl)
 
 # --- Structured JSON Logging ---
 _log_handler = logging.StreamHandler()
@@ -59,13 +69,27 @@ redis_client: aioredis.Redis = aioredis.Redis(
     host=settings.redis_host, port=6379, decode_responses=True, socket_timeout=2
 )
 
-# --- Rate Limiting Lua Script (atomic) ---
+# --- Rate Limiting Lua Script (Sliding Window Log) ---
 RATE_LIMIT_SCRIPT = """
-local current = redis.call('INCR', KEYS[1])
-if current == 1 then
-    redis.call('EXPIRE', KEYS[1], ARGV[1])
+local key = KEYS[1]
+local window_secs = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+
+local time = redis.call('TIME')
+local now_ms = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+local clear_before = now_ms - (window_secs * 1000)
+
+redis.call('ZREMRANGEBYSCORE', key, 0, clear_before)
+local current_count = redis.call('ZCARD', key)
+
+if current_count < limit then
+    local member = now_ms .. '-' .. time[2]
+    redis.call('ZADD', key, now_ms, member)
+    redis.call('PEXPIRE', key, window_secs * 1000)
+    return current_count + 1
+else
+    return current_count + 1
 end
-return current
 """
 
 # --- Constants ---
@@ -87,6 +111,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ASN Risk API",
     version=API_VERSION,
+    default_response_class=ORJSONResponse,
     description="""
     ## Autonomous System Risk Scoring API
 
@@ -106,7 +131,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# --- CORS ---
+# --- CORS & Compression ---
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins.split(","),
@@ -114,6 +140,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Observability: Metrics (Prometheus) ---
+Instrumentator().instrument(app).expose(app)
 
 # --- Security ---
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -136,8 +165,8 @@ class ErrorEnvelope(BaseModel):
 
 def error_response(
     status_code: int, code: str, message: str, request_id: str = ""
-) -> JSONResponse:
-    return JSONResponse(
+) -> ORJSONResponse:
+    return ORJSONResponse(
         status_code=status_code,
         content=ErrorEnvelope(
             error=message, code=code, request_id=request_id
@@ -292,12 +321,18 @@ async def request_middleware(request: Request, call_next):
     window = 60
 
     try:
-        current = await redis_client.eval(RATE_LIMIT_SCRIPT, 1, rate_limit_key, window)
+        current = await redis_client.eval(
+            RATE_LIMIT_SCRIPT, 
+            1, 
+            rate_limit_key, 
+            window, 
+            settings.api_rate_limit
+        )
         remaining = max(0, settings.api_rate_limit - current)
 
         if current > settings.api_rate_limit:
             ttl = await redis_client.ttl(rate_limit_key)
-            return JSONResponse(
+            return ORJSONResponse(
                 status_code=429,
                 content=ErrorEnvelope(
                     error=f"Rate limit exceeded. Try again in {ttl} seconds.",
@@ -402,7 +437,7 @@ def health_check():
     if all(v == "up" for v in health["dependencies"].values()):
         return health
     return Response(
-        content=json.dumps(health), status_code=503, media_type="application/json"
+        content=orjson.dumps(health), status_code=503, media_type="application/json"
     )
 
 
@@ -543,11 +578,29 @@ async def get_asn_score(
     trace_id = getattr(request.state, "trace_id", "")
 
     cache_key = f"score:v3:{asn}"
+    
+    # Check L1 cache (In-memory)
+    cached_l1 = l1_cache.get(cache_key)
+    if cached_l1:
+        request.state.cache_hit = True
+        response.headers["X-Cache-Tier"] = "L1"
+        etag = _stable_etag(cached_l1["last_updated"])
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304)
+        response.headers["ETag"] = etag
+        response.headers["Cache-Control"] = f"public, max-age={settings.cache_ttl}"
+        return cached_l1
+
     try:
+        # Check L2 cache (Redis)
         cached = await redis_client.get(cache_key)
         if cached:
             request.state.cache_hit = True
-            data = json.loads(cached)
+            response.headers["X-Cache-Tier"] = "L2"
+            data = orjson.loads(cached)
+            # Hydrate L1
+            l1_cache[cache_key] = data
+            
             etag = _stable_etag(data["last_updated"])
             if request.headers.get("if-none-match") == etag:
                 return Response(status_code=304)
@@ -578,114 +631,122 @@ async def get_asn_score(
         WHERE r.asn = :asn
     """)
 
-    with pg_engine.connect() as conn:
-        result = conn.execute(query, {"asn": asn}).mappings().fetchone()
+    cache_key_total = "stats:asn_total_count"
+    try:
+        total_count_cached = await redis_client.get(cache_key_total)
+    except Exception:
+        total_count_cached = None
 
-        if not result:
-            raise HTTPException(
-                status_code=404, detail="ASN not found or not yet scored"
-            )
-
-        result = dict(result)
-        score = result["total_score"]
-
-        # Rank percentile (cached total count)
-        cache_key_total = "stats:asn_total_count"
-        try:
-            total_count = await redis_client.get(cache_key_total)
-            if total_count:
-                total_count = int(total_count)
-            else:
-                total_count = conn.execute(
-                    text("SELECT count(*) FROM asn_registry")
-                ).scalar()
-                await redis_client.setex(cache_key_total, 300, total_count)
-        except Exception:
-            total_count = conn.execute(
-                text("SELECT count(*) FROM asn_registry")
+    def _fetch_db_data():
+        with pg_engine.connect() as conn:
+            row = conn.execute(query, {"asn": asn}).mappings().fetchone()
+            if not row:
+                return None
+            
+            r_dict = dict(row)
+            score = r_dict["total_score"]
+            
+            t_count = int(total_count_cached) if total_count_cached else conn.execute(text("SELECT count(*) FROM asn_registry")).scalar()
+            
+            c_lower = conn.execute(
+                text("SELECT count(*) FROM asn_registry WHERE total_score < :score"),
+                {"score": score},
             ).scalar()
+            
+            return r_dict, t_count, c_lower
 
-        count_lower = conn.execute(
-            text("SELECT count(*) FROM asn_registry WHERE total_score < :score"),
-            {"score": score},
-        ).scalar()
+    db_res = await run_in_threadpool(_fetch_db_data)
+    
+    if not db_res:
+        raise HTTPException(status_code=404, detail="ASN not found or not yet scored")
+        
+    result, total_count, count_lower = db_res
+    score = result["total_score"]
 
-        percentile = (count_lower / total_count * 100.0) if total_count > 0 else 0.0
-
-        level = result["risk_level"]
-        if level == "UNKNOWN":
-            level = (
-                "CRITICAL"
-                if score < 50
-                else "HIGH" if score < 75 else "MEDIUM" if score < 90 else "LOW"
-            )
-
-        details = generate_penalty_details(result)
-
-        response_data = {
-            "asn": result["asn"],
-            "name": result["name"],
-            "country_code": result["country_code"],
-            "registry": result["registry"],
-            "risk_score": score,
-            "risk_level": level,
-            "rank_percentile": round(percentile, 1),
-            "downstream_score": result.get("downstream_score"),
-            "last_updated": str(result["last_scored_at"]),
-            "breakdown": {
-                "hygiene": result["hygiene_score"],
-                "threat": result["threat_score"],
-                "stability": result["stability_score"],
-            },
-            "signals": {
-                "hygiene": {
-                    "rpki_invalid_percent": float(result["rpki_invalid_percent"] or 0),
-                    "rpki_unknown_percent": float(result["rpki_unknown_percent"] or 0),
-                    "has_route_leaks": result["has_route_leaks"] or False,
-                    "has_bogon_ads": result["has_bogon_ads"] or False,
-                    "is_stub_but_transit": result["is_stub_but_transit"] or False,
-                    "prefix_granularity_score": result["prefix_granularity_score"],
-                },
-                "threats": {
-                    "spamhaus_listed": result["spamhaus_listed"] or False,
-                    "spam_emission_rate": float(result["spam_emission_rate"] or 0),
-                    "botnet_c2_count": result["botnet_c2_count"] or 0,
-                    "phishing_hosting_count": result["phishing_hosting_count"] or 0,
-                    "malware_distribution_count": result["malware_distribution_count"]
-                    or 0,
-                },
-                "metadata": {
-                    "has_peeringdb_profile": result["has_peeringdb_profile"] or False,
-                    "upstream_tier1_count": result["upstream_tier1_count"] or 0,
-                    "is_whois_private": result["is_whois_private"] or False,
-                },
-                "forensics": {
-                    "ddos_blackhole_count": result.get("ddos_blackhole_count") or 0,
-                    "excessive_prepending_count": result.get(
-                        "excessive_prepending_count"
-                    )
-                    or 0,
-                },
-            },
-            "details": [d.model_dump() for d in details],
-        }
-
+    if not total_count_cached and total_count:
         try:
-            await redis_client.setex(
-                cache_key, settings.cache_ttl, json.dumps(response_data)
-            )
-        except Exception as e:
-            logger.error("cache_write_error", extra={"asn": asn, "error": str(e)})
+            await redis_client.setex(cache_key_total, 300, total_count)
+        except Exception:
+            pass
 
-        etag = _stable_etag(response_data["last_updated"])
-        response.headers["ETag"] = etag
-        response.headers["Cache-Control"] = f"public, max-age={settings.cache_ttl}"
+    percentile = (count_lower / total_count * 100.0) if total_count > 0 else 0.0
 
-        return response_data
+    level = result["risk_level"]
+    if level == "UNKNOWN":
+        level = (
+            "CRITICAL"
+            if score < 50
+            else "HIGH" if score < 75 else "MEDIUM" if score < 90 else "LOW"
+        )
+
+    details = generate_penalty_details(result)
+
+    response_data = {
+        "asn": result["asn"],
+        "name": result["name"],
+        "country_code": result["country_code"],
+        "registry": result["registry"],
+        "risk_score": score,
+        "risk_level": level,
+        "rank_percentile": round(percentile, 1),
+        "downstream_score": result.get("downstream_score"),
+        "last_updated": str(result["last_scored_at"]),
+        "breakdown": {
+            "hygiene": result["hygiene_score"],
+            "threat": result["threat_score"],
+            "stability": result["stability_score"],
+        },
+        "signals": {
+            "hygiene": {
+                "rpki_invalid_percent": float(result["rpki_invalid_percent"] or 0),
+                "rpki_unknown_percent": float(result["rpki_unknown_percent"] or 0),
+                "has_route_leaks": result["has_route_leaks"] or False,
+                "has_bogon_ads": result["has_bogon_ads"] or False,
+                "is_stub_but_transit": result["is_stub_but_transit"] or False,
+                "prefix_granularity_score": result["prefix_granularity_score"],
+            },
+            "threats": {
+                "spamhaus_listed": result["spamhaus_listed"] or False,
+                "spam_emission_rate": float(result["spam_emission_rate"] or 0),
+                "botnet_c2_count": result["botnet_c2_count"] or 0,
+                "phishing_hosting_count": result["phishing_hosting_count"] or 0,
+                "malware_distribution_count": result["malware_distribution_count"]
+                or 0,
+            },
+            "metadata": {
+                "has_peeringdb_profile": result["has_peeringdb_profile"] or False,
+                "upstream_tier1_count": result["upstream_tier1_count"] or 0,
+                "is_whois_private": result["is_whois_private"] or False,
+            },
+            "forensics": {
+                "ddos_blackhole_count": result.get("ddos_blackhole_count") or 0,
+                "excessive_prepending_count": result.get(
+                    "excessive_prepending_count"
+                )
+                or 0,
+            },
+        },
+        "details": [d.model_dump() for d in details],
+    }
+
+    try:
+        await redis_client.setex(
+            cache_key, settings.cache_ttl, orjson.dumps(response_data)
+        )
+        # Sync to L1 Memory Cache
+        l1_cache[cache_key] = response_data
+    except Exception as e:
+        logger.error("cache_write_error", extra={"asn": asn, "error": str(e)})
+
+    etag = _stable_etag(response_data["last_updated"])
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = f"public, max-age={settings.cache_ttl}"
+
+    return response_data
 
 
 @app.get("/v1/asn/{asn}/history", response_model=PaginatedHistory, tags=["Analytics"])
-async def get_asn_history(
+def get_asn_history(
     asn: int,
     days: int = 30,
     offset: int = 0,
@@ -769,7 +830,7 @@ async def add_to_whitelist(
 
 
 @app.post("/v1/tools/bulk-risk-check", tags=["Scoring"])
-async def bulk_risk_check(
+def bulk_risk_check(
     req: BulkAnalysisRequest, api_key: str = Depends(get_api_key)
 ):
     """Bulk check multiple ASNs at once. Max 1000 ASNs per request."""
@@ -814,7 +875,7 @@ async def bulk_risk_check(
 @app.get(
     "/v1/asn/{asn}/upstreams", response_model=PeerPressureResponse, tags=["Scoring"]
 )
-async def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
+def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
     """Upstream Risk Assessment - evaluates the risk of upstream providers."""
     _validate_asn(asn)
 
@@ -921,14 +982,14 @@ async def get_asn_score_compat(
 
 
 @app.get("/asn/{asn}/history", tags=["Analytics"], include_in_schema=False)
-async def get_asn_history_compat(
+def get_asn_history_compat(
     asn: int,
     days: int = 30,
     offset: int = 0,
     limit: int = 200,
     api_key: str = Depends(get_api_key),
 ):
-    return await get_asn_history(asn, days, offset, limit, api_key)
+    return get_asn_history(asn, days, offset, limit, api_key)
 
 
 @app.post("/whitelist", tags=["System"], include_in_schema=False)
@@ -939,10 +1000,10 @@ async def add_to_whitelist_compat(
 
 
 @app.post("/tools/bulk-risk-check", tags=["Scoring"], include_in_schema=False)
-async def bulk_risk_check_compat(
+def bulk_risk_check_compat(
     req: BulkAnalysisRequest, api_key: str = Depends(get_api_key)
 ):
-    return await bulk_risk_check(req, api_key)
+    return bulk_risk_check(req, api_key)
 
 
 @app.get(
@@ -951,5 +1012,29 @@ async def bulk_risk_check_compat(
     tags=["Scoring"],
     include_in_schema=False,
 )
-async def get_peer_pressure_compat(asn: int, api_key: str = Depends(get_api_key)):
-    return await get_peer_pressure(asn, api_key)
+def get_peer_pressure_compat(asn: int, api_key: str = Depends(get_api_key)):
+    return get_peer_pressure(asn, api_key)
+
+@app.get("/feeds/edl", tags=["Integrations"])
+def get_edl_feed(max_score: float = Query(50.0, ge=0.0, le=100.0)):
+    """
+    Feed for Firewalls (Palo Alto EDL, Fortinet, etc).
+    Returns a plaintext list of ASNs (ASXXXX) below the maximum given risk score.
+    """
+    try:
+        from fastapi.responses import PlainTextResponse
+        
+        def _fetch_edl():
+            with pg_engine.connect() as conn:
+                rows = conn.execute(
+                    text("SELECT asn FROM asn_registry WHERE total_score <= :max_score ORDER BY asn ASC"),
+                    {"max_score": max_score}
+                ).fetchall()
+                return [f"AS{row[0]}" for row in rows]
+                
+        edl_lines = _fetch_edl()
+        return PlainTextResponse("\n".join(edl_lines))
+    except Exception as e:
+        logger.error(f"edl_generation_error: {e}")
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("", status_code=500)
