@@ -8,6 +8,7 @@ import socket
 import dns.asyncresolver
 import ipaddress
 import hashlib
+import hmac
 from cachetools import TTLCache
 import logging
 import urllib.parse
@@ -166,8 +167,19 @@ Instrumentator().instrument(app).expose(app)
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
+def _verify_api_key(provided: str | None) -> bool:
+    """Constant-time comparison to prevent timing side-channel attacks.
+    Returns True only if `provided` matches the configured secret exactly."""
+    if not provided or not settings.api_secret_key:
+        return False
+    return hmac.compare_digest(
+        provided.encode("utf-8"),
+        settings.api_secret_key.encode("utf-8"),
+    )
+
+
 async def get_api_key(request: Request, api_key_header: str = Security(api_key_header)):
-    if not api_key_header or api_key_header != settings.api_secret_key:
+    if not _verify_api_key(api_key_header):
         client_ip = request.client.host if request.client else "unknown"
         logger.warning("auth_failure", extra={"ip": client_ip})
         raise HTTPException(status_code=403, detail="Invalid or Missing API Key")
@@ -1124,7 +1136,8 @@ async def websocket_firehose(websocket: WebSocket, api_key: str = Query(...)):
     - HEARTBEAT_INTERVAL: periodic ping to reap zombie connections (silent disconnects).
     """
     await websocket.accept()
-    if not api_key:
+    if not _verify_api_key(api_key):
+        logger.warning("ws_auth_failure")
         await websocket.close(code=1008)
         return
 

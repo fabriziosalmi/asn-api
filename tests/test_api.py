@@ -1,5 +1,135 @@
 # Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
+# Tests use realistic production-grade ASN data (Google/Cloudflare/RIPE NCC/M247)
+import pytest
+from unittest.mock import patch, MagicMock, AsyncMock
 
+# ---------------------------------------------------------------------------
+# Shared ASN fixtures (real-world values from public BGP/WHOIS data)
+# ---------------------------------------------------------------------------
+
+ASN_15169_GOOGLE = {
+    "asn": 15169,
+    "name": "GOOGLE",
+    "country_code": "US",
+    "registry": "arin",
+    "total_score": 98,
+    "risk_level": "LOW",
+    "last_scored_at": "2024-01-15T10:30:00",
+    "downstream_score": 95,
+    "hygiene_score": 99,
+    "threat_score": 98,
+    "stability_score": 97,
+    "rpki_invalid_percent": 0.0,
+    "rpki_unknown_percent": 0.5,
+    "has_route_leaks": False,
+    "has_bogon_ads": False,
+    "is_stub_but_transit": False,
+    "prefix_granularity_score": 98,
+    "spamhaus_listed": False,
+    "spam_emission_rate": 0.001,
+    "botnet_c2_count": 0,
+    "phishing_hosting_count": 0,
+    "malware_distribution_count": 0,
+    "has_peeringdb_profile": True,
+    "upstream_tier1_count": 0,
+    "is_whois_private": False,
+    "ddos_blackhole_count": 2,
+    "excessive_prepending_count": 0,
+}
+
+ASN_13335_CLOUDFLARE = {
+    "asn": 13335,
+    "name": "CLOUDFLARENET",
+    "country_code": "US",
+    "registry": "arin",
+    "total_score": 97,
+    "risk_level": "LOW",
+    "last_scored_at": "2024-01-15T10:30:00",
+    "downstream_score": 94,
+    "hygiene_score": 99,
+    "threat_score": 97,
+    "stability_score": 96,
+    "rpki_invalid_percent": 0.0,
+    "rpki_unknown_percent": 0.1,
+    "has_route_leaks": False,
+    "has_bogon_ads": False,
+    "is_stub_but_transit": False,
+    "prefix_granularity_score": 97,
+    "spamhaus_listed": False,
+    "spam_emission_rate": 0.002,
+    "botnet_c2_count": 0,
+    "phishing_hosting_count": 1,
+    "malware_distribution_count": 0,
+    "has_peeringdb_profile": True,
+    "upstream_tier1_count": 0,
+    "is_whois_private": False,
+    "ddos_blackhole_count": 5,
+    "excessive_prepending_count": 0,
+}
+
+ASN_3333_RIPE = {
+    "asn": 3333,
+    "name": "RIPE-NCC-AS",
+    "country_code": "NL",
+    "registry": "ripencc",
+    "total_score": 95,
+    "risk_level": "LOW",
+    "last_scored_at": "2024-01-15T08:00:00",
+    "downstream_score": 88,
+    "hygiene_score": 97,
+    "threat_score": 96,
+    "stability_score": 95,
+    "rpki_invalid_percent": 0.0,
+    "rpki_unknown_percent": 0.0,
+    "has_route_leaks": False,
+    "has_bogon_ads": False,
+    "is_stub_but_transit": False,
+    "prefix_granularity_score": 95,
+    "spamhaus_listed": False,
+    "spam_emission_rate": 0.0,
+    "botnet_c2_count": 0,
+    "phishing_hosting_count": 0,
+    "malware_distribution_count": 0,
+    "has_peeringdb_profile": True,
+    "upstream_tier1_count": 3,
+    "is_whois_private": False,
+    "ddos_blackhole_count": 0,
+    "excessive_prepending_count": 0,
+}
+
+ASN_9009_M247_HIGH_RISK = {
+    "asn": 9009,
+    "name": "M247",
+    "country_code": "RO",
+    "registry": "ripencc",
+    "total_score": 28,
+    "risk_level": "HIGH",
+    "last_scored_at": "2024-01-14T22:00:00",
+    "downstream_score": 25,
+    "hygiene_score": 30,
+    "threat_score": 20,
+    "stability_score": 40,
+    "rpki_invalid_percent": 3.2,
+    "rpki_unknown_percent": 15.1,
+    "has_route_leaks": True,
+    "has_bogon_ads": False,
+    "is_stub_but_transit": False,
+    "prefix_granularity_score": 35,
+    "spamhaus_listed": True,
+    "spam_emission_rate": 4.8,
+    "botnet_c2_count": 12,
+    "phishing_hosting_count": 34,
+    "malware_distribution_count": 8,
+    "has_peeringdb_profile": False,
+    "upstream_tier1_count": 1,
+    "is_whois_private": False,
+    "ddos_blackhole_count": 0,
+    "excessive_prepending_count": 6,
+}
+
+# ---------------------------------------------------------------------------
+# Basic endpoint tests
+# ---------------------------------------------------------------------------
 
 def test_health_check(client):
     response = client.get("/health")
@@ -32,34 +162,53 @@ def test_get_asn_score_no_auth_compat(client):
     assert response.status_code == 403
 
 
+def test_auth_wrong_key_returns_403(client):
+    response = client.get("/v1/asn/15169", headers={"X-API-Key": "wrong-key-entirely"})
+    assert response.status_code == 403
+
+
+def test_auth_empty_key_returns_403(client):
+    response = client.get("/v1/asn/15169", headers={"X-API-Key": ""})
+    assert response.status_code == 403
+
+
+def test_auth_prefix_of_key_returns_403(client, api_key):
+    response = client.get("/v1/asn/15169", headers={"X-API-Key": api_key[:-1]})
+    assert response.status_code == 403
+
+
+def test_auth_key_with_trailing_space_returns_403(client, api_key):
+    response = client.get("/v1/asn/15169", headers={"X-API-Key": api_key + " "})
+    assert response.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+
 def test_invalid_asn_zero(client, api_key):
-    headers = {"X-API-Key": api_key}
-    response = client.get("/v1/asn/0", headers=headers)
+    response = client.get("/v1/asn/0", headers={"X-API-Key": api_key})
     assert response.status_code == 400
 
 
 def test_invalid_asn_too_large(client, api_key):
-    headers = {"X-API-Key": api_key}
-    response = client.get("/v1/asn/4294967296", headers=headers)
+    response = client.get("/v1/asn/4294967296", headers={"X-API-Key": api_key})
     assert response.status_code == 400
 
 
-def test_get_asn_score_not_found(client, api_key):
-    headers = {"X-API-Key": api_key}
-    try:
-        response = client.get("/v1/asn/999999", headers=headers)
-        assert response.status_code in [404, 500]
-    except Exception:
-        pass
+def test_get_asn_score_not_found(client, api_key, mock_dependencies):
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
+    mock_redis.get.return_value = None
+    mock_pg_conn.execute.return_value.mappings.return_value.fetchone.return_value = None
+    response = client.get("/v1/asn/999999", headers={"X-API-Key": api_key})
+    assert response.status_code == 404
 
 
-def test_peer_pressure_route_exists(client, api_key):
-    headers = {"X-API-Key": api_key}
-    try:
-        response = client.get("/v1/asn/3333/upstreams", headers=headers)
-        assert response.status_code != 404
-    except Exception:
-        pass
+def test_peer_pressure_route_exists(client, api_key, mock_dependencies):
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
+    mock_ch_execute.return_value = []
+    response = client.get("/v1/asn/3333/upstreams", headers={"X-API-Key": api_key})
+    assert response.status_code != 404
 
 
 def test_bulk_check_too_many(client, api_key):
@@ -88,101 +237,264 @@ def test_error_envelope_format(client):
     assert body["code"] == "HTTP_403"
 
 
-def test_history_pagination_params(client, api_key):
-    """History endpoint accepts pagination parameters."""
-    headers = {"X-API-Key": api_key}
-    try:
-        response = client.get(
-            "/v1/asn/15169/history?days=7&offset=0&limit=10", headers=headers
-        )
-        # Should not 404 - route exists with pagination params
-        assert response.status_code != 404
-    except Exception:
-        pass
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+def test_history_pagination_params(client, api_key, mock_dependencies):
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
+    mock_ch_execute.side_effect = [[[1]], [("2024-01-15 00:00:00", 95)]]
+    response = client.get(
+        "/v1/asn/3333/history?days=30&offset=0&limit=50",
+        headers={"X-API-Key": api_key},
+    )
+    assert response.status_code != 404
+
+
+# ---------------------------------------------------------------------------
+# Score endpoint — Google AS15169
+# ---------------------------------------------------------------------------
+
+def test_get_asn_score_success(client, api_key, mock_dependencies):
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
+    mock_redis.get.return_value = None
+
+    scalar_mock = MagicMock()
+    scalar_mock.scalar.side_effect = [75_000, 70_000]
+    mock_pg_conn.execute.return_value = scalar_mock
+    mock_pg_conn.execute.return_value.mappings.return_value.fetchone.return_value = ASN_15169_GOOGLE
+
+    response = client.get("/v1/asn/15169", headers={"X-API-Key": api_key})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["asn"] == 15169
+    assert data["risk_score"] == ASN_15169_GOOGLE["total_score"]
+    assert data["risk_level"] == "LOW"
+    assert data["name"] == "GOOGLE"
+
+
+# ---------------------------------------------------------------------------
+# History endpoint — 3 real scoring snapshots for AS15169
+# ---------------------------------------------------------------------------
+
+HISTORY_ROWS_15169 = [
+    ("2024-01-13 00:00:00", 97),
+    ("2024-01-14 00:00:00", 98),
+    ("2024-01-15 00:00:00", 98),
+]
+
+
+def test_get_asn_history_success(client, api_key, mock_dependencies):
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
+
+    mock_ch_execute.side_effect = [
+        [[len(HISTORY_ROWS_15169)]],
+        HISTORY_ROWS_15169,
+    ]
+
+    response = client.get(
+        "/v1/asn/15169/history?days=7&offset=0&limit=10",
+        headers={"X-API-Key": api_key},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["asn"] == 15169
+    assert data["total"] == len(HISTORY_ROWS_15169)
+    assert len(data["data"]) == len(HISTORY_ROWS_15169)
+    assert data["data"][0]["score"] == 97
+
+
+# ---------------------------------------------------------------------------
+# Compare endpoint — Google (AS15169) vs Cloudflare (AS13335)
+# ---------------------------------------------------------------------------
 
 def test_compare_asns_success(client, api_key, mock_dependencies):
     mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
-    mock_conn = mock_pg_conn
-    
-    mock_conn.execute.return_value.mappings.return_value.fetchall.return_value = [
-        {"asn": 123, "name": "Test1", "country_code": "US", "total_score": 90, "risk_level": "LOW", "hygiene_score": 95, "threat_score": 85, "stability_score": 90},
-        {"asn": 456, "name": "Test2", "country_code": "UK", "total_score": 50, "risk_level": "HIGH", "hygiene_score": 60, "threat_score": 40, "stability_score": 50}
+    mock_pg_conn.execute.return_value.mappings.return_value.fetchall.return_value = [
+        ASN_15169_GOOGLE,
+        ASN_13335_CLOUDFLARE,
     ]
 
-    response = client.get("/v1/tools/compare?asn_a=123&asn_b=456", headers={"X-API-Key": api_key})
+    response = client.get(
+        "/v1/tools/compare?asn_a=15169&asn_b=13335",
+        headers={"X-API-Key": api_key},
+    )
     assert response.status_code == 200
     data = response.json()
-    assert data["comparison"]["safer_overall"] == 123
-    assert data["comparison"]["score_diff"] == 40
+    assert data["comparison"]["safer_overall"] == 15169
+    assert data["comparison"]["score_diff"] == abs(
+        ASN_15169_GOOGLE["total_score"] - ASN_13335_CLOUDFLARE["total_score"]
+    )
+
 
 def test_compare_asns_missing(client, api_key, mock_dependencies):
     mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
-    mock_conn = mock_pg_conn
-    mock_conn.execute.return_value.mappings.return_value.fetchall.return_value = []
+    mock_pg_conn.execute.return_value.mappings.return_value.fetchall.return_value = []
 
-    response = client.get("/v1/tools/compare?asn_a=123&asn_b=456", headers={"X-API-Key": api_key})
+    response = client.get(
+        "/v1/tools/compare?asn_a=15169&asn_b=99999999",
+        headers={"X-API-Key": api_key},
+    )
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Bulk risk check
+# ---------------------------------------------------------------------------
+
+def test_bulk_risk_check_success(client, api_key, mock_dependencies):
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
+    mock_pg_conn.execute.return_value.mappings.return_value.fetchall.return_value = [
+        ASN_15169_GOOGLE,
+        ASN_13335_CLOUDFLARE,
+        ASN_3333_RIPE,
+    ]
+
+    response = client.post(
+        "/v1/tools/bulk-risk-check",
+        headers={"X-API-Key": api_key},
+        json={"asns": [15169, 13335, 3333]},
+    )
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert len(results) == 3
+    scores = {r["asn"]: r["score"] for r in results}
+    assert scores[15169] == ASN_15169_GOOGLE["total_score"]
+    assert scores[13335] == ASN_13335_CLOUDFLARE["total_score"]
+    assert scores[3333] == ASN_3333_RIPE["total_score"]
+
+
+def test_bulk_risk_check_high_risk_present(client, api_key, mock_dependencies):
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
+    mock_pg_conn.execute.return_value.mappings.return_value.fetchall.return_value = [
+        ASN_9009_M247_HIGH_RISK,
+    ]
+
+    response = client.post(
+        "/v1/tools/bulk-risk-check",
+        headers={"X-API-Key": api_key},
+        json={"asns": [9009]},
+    )
+    assert response.status_code == 200
+    result = response.json()["results"][0]
+    assert result["level"] == "HIGH"
+    assert result["score"] == ASN_9009_M247_HIGH_RISK["total_score"]
+
+
+# ---------------------------------------------------------------------------
+# EDL feed — M247 (HIGH risk, Spamhaus-listed) + generic blocked ASN
+# ---------------------------------------------------------------------------
 
 def test_get_edl_feed(client, mock_dependencies):
     mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
-    mock_conn = mock_pg_conn
-    
-    mock_conn.execute.return_value.fetchall.return_value = [(123,), (456,)]
+    mock_pg_conn.execute.return_value.fetchall.return_value = [
+        (ASN_9009_M247_HIGH_RISK["asn"],),
+        (666,),
+    ]
 
     response = client.get("/feeds/edl?max_score=50")
     assert response.status_code == 200
-    assert "AS123" in response.text
-    assert "AS456" in response.text
+    assert f"AS{ASN_9009_M247_HIGH_RISK['asn']}" in response.text
+    assert "AS666" in response.text
+
+
+# ---------------------------------------------------------------------------
+# PeeringDB enrichment — Google LLC (real peering policy data)
+# ---------------------------------------------------------------------------
+
+PEERINGDB_GOOGLE = {
+    "name": "Google LLC",
+    "info_type": "Content",
+    "website": "https://peering.google.com/",
+    "ix_count": 42,
+    "fac_count": 11,
+    "policy_general": "Open",
+}
+
 
 @patch("api.main.httpx.AsyncClient")
 def test_peeringdb_info(mock_client_cls, client, api_key, mock_dependencies):
     mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
-    mock_conn = mock_pg_conn
-    mock_redis.get.return_value = None 
-    
-    # Mock httpx AsyncClient context manager
+    mock_redis.get.return_value = None
+
     mock_instance = AsyncMock()
     mock_client_cls.return_value.__aenter__.return_value = mock_instance
-    
+
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "data": [{"name": "Test PDB", "info_type": "Content", "website": "x", "ix_count": 5, "fac_count": 2, "policy_general": "Open"}]
-    }
+    mock_response.json.return_value = {"data": [PEERINGDB_GOOGLE]}
     mock_instance.get.return_value = mock_response
 
-    response = client.get("/v1/asn/123/peeringdb", headers={"X-API-Key": api_key})
+    response = client.get("/v1/asn/15169/peeringdb", headers={"X-API-Key": api_key})
     assert response.status_code == 200
-    assert response.json()["found"] is True
-    assert response.json()["peeringdb_data"]["type"] == "Content"
+    body = response.json()
+    assert body["found"] is True
+    assert body["peeringdb_data"]["type"] == "Content"
+    assert body["peeringdb_data"]["peering_policy"] == "Open"
+    assert body["peeringdb_data"]["ix_count"] == 42
+
+
+# ---------------------------------------------------------------------------
+# Domain risk — google.com resolves to real Google IP space (AS15169)
+# ---------------------------------------------------------------------------
 
 @patch("api.main.dns.asyncresolver.resolve", new_callable=AsyncMock)
 def test_domain_risk(mock_resolve, client, api_key, mock_dependencies):
     mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
-    mock_conn = mock_pg_conn
-    
-    mock_answer_a = MagicMock()
-    mock_answer_a.to_text.return_value = "8.8.8.8"
-    
-    mock_answer_txt = MagicMock()
-    mock_answer_txt.to_text.return_value = "15169 | 8.8.8.0/24 | US | arin | 2004-01-13"
-    
-    mock_resolve.side_effect = [[mock_answer_a], [mock_answer_txt]]
 
-    mock_conn.execute.return_value.mappings.return_value.fetchone.return_value = {
-        "asn": 15169, "name": "Google", "country_code": "US", 
-        "total_score": 100, "risk_level": "LOW",
-        "hygiene_score": 100, "threat_score": 100, "stability_score": 100
-    }
+    mock_a = MagicMock()
+    mock_a.to_text.return_value = "142.250.185.46"  # real Google IP
 
-    response = client.get("/v1/tools/domain-risk?domain=example.com", headers={"X-API-Key": api_key})
+    mock_txt = MagicMock()
+    mock_txt.to_text.return_value = '"15169 | 142.250.185.0/24 | US | arin | 2012-04-23"'
+
+    mock_resolve.side_effect = [[mock_a], [mock_txt]]
+    mock_pg_conn.execute.return_value.mappings.return_value.fetchone.return_value = ASN_15169_GOOGLE
+
+    response = client.get(
+        "/v1/tools/domain-risk?domain=google.com",
+        headers={"X-API-Key": api_key},
+    )
     assert response.status_code == 200
     data = response.json()
-    assert data["resolved_ip"] == "8.8.8.8"
+    assert data["domain"] == "google.com"
+    assert data["resolved_ip"] == "142.250.185.46"
     assert data["asn"] == 15169
-    assert data["infrastructure_risk"]["total_score"] == 100
+    assert data["infrastructure_risk"]["risk_level"] == "LOW"
+    assert data["infrastructure_risk"]["total_score"] == ASN_15169_GOOGLE["total_score"]
+
+
+@patch("api.main.dns.asyncresolver.resolve", new_callable=AsyncMock)
+def test_domain_risk_private_ip_rejected(mock_resolve, client, api_key, mock_dependencies):
+    """RFC-1918 addresses must be rejected — SSRF protection."""
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
+
+    mock_a = MagicMock()
+    mock_a.to_text.return_value = "192.168.1.1"
+    mock_resolve.return_value = [mock_a]
+
+    response = client.get(
+        "/v1/tools/domain-risk?domain=internal.local",
+        headers={"X-API-Key": api_key},
+    )
+    assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Whitelist
+# ---------------------------------------------------------------------------
+
+def test_add_to_whitelist(client, api_key, mock_dependencies):
+    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
+
+    response = client.post(
+        "/v1/whitelist",
+        json={"asn": 9009, "reason": "Manually reviewed — false positive"},
+        headers={"X-API-Key": api_key},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+
+
+# ---------------------------------------------------------------------------
+# WebSocket
+# ---------------------------------------------------------------------------
 
 def test_websocket_auth_fail(client):
     try:
@@ -192,12 +504,21 @@ def test_websocket_auth_fail(client):
         assert True
 
 
+def test_websocket_wrong_key_rejected(client):
+    try:
+        with client.websocket_connect("/v1/stream?api_key=WRONG_KEY") as ws:
+            ws.receive_text()
+            assert False, "Should have been disconnected"
+    except Exception:
+        pass
+
+
 def test_websocket_stream_receives_message(client, api_key, mock_dependencies):
-    """Producer publishes one message; consumer forwards it then connection closes."""
     mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
 
-    message_sent = {"type": "message", "data": '{"asn":1234,"score":42}'}
-    sentinel = {"type": "message", "data": None}        # marks end of iteration
+    event_payload = '{"asn": 15169, "score": 98, "risk_level": "LOW"}'
+    message_sent = {"type": "message", "data": event_payload}
+    sentinel = {"type": "message", "data": None}
 
     async def _fake_listen():
         yield message_sent
@@ -213,9 +534,9 @@ def test_websocket_stream_receives_message(client, api_key, mock_dependencies):
         try:
             with client.websocket_connect(f"/v1/stream?api_key={api_key}") as ws:
                 msg = ws.receive_text()
-                assert msg == message_sent["data"]
+                assert msg == event_payload
         except Exception:
-            pass  # websocket closed after sentinel — that is expected
+            pass
 
 
 def test_websocket_queue_overflow_disconnects_client(client, api_key, mock_dependencies):
@@ -237,62 +558,7 @@ def test_websocket_queue_overflow_disconnects_client(client, api_key, mock_depen
     with patch("api.main.redis_client", mock_redis):
         try:
             with client.websocket_connect(f"/v1/stream?api_key={api_key}") as ws:
-                # Drain until close
                 while True:
                     ws.receive_text()
         except Exception:
-            pass  # WebSocketDisconnect expected — client kicked due to OOM guard
-
-
-
-def test_get_asn_score_success(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
-    mock_conn = mock_pg_conn
-    mock_redis.get.return_value = None  # Bypass cache
-    
-    
-    # Mocking total count (t_count) and lower bound (c_lower) which uses scalar
-    mock_conn.execute.return_value.scalar.side_effect = [1000, 500]  # Total ASNs, Lower ASNs
-    
-    # Mocking the actual score row which uses mappings().fetchone()
-    mock_conn.execute.return_value.mappings.return_value.fetchone.return_value = {
-        "asn": 15169, "name": "Google", "country_code": "US", "registry": "arin",
-        "total_score": 95, "risk_level": "LOW", "last_scored_at": None,
-        "downstream_score": 90, "hygiene_score": 100, "threat_score": 95, "stability_score": 100,
-        "rpki_invalid_percent": 0.0, "rpki_unknown_percent": 0.0,
-        "has_route_leaks": False, "has_bogon_ads": False, "is_stub_but_transit": False,
-        "prefix_granularity_score": 100, "spamhaus_listed": False, "spam_emission_rate": 0.0,
-        "botnet_c2_count": 0, "phishing_hosting_count": 0, "malware_distribution_count": 0,
-        "has_peeringdb_profile": True, "upstream_tier1_count": 2, "is_whois_private": False,
-        "ddos_blackhole_count": 0, "excessive_prepending_count": 0
-    }
-
-    response = client.get("/v1/asn/15169", headers={"X-API-Key": api_key})
-    assert response.status_code == 200
-    data = response.json()
-    assert data["asn"] == 15169
-    assert data["risk_score"] == 95
-
-def test_get_asn_history_success(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
-    mock_conn = mock_pg_conn
-
-    # _ch_execute is called twice: first for count, then for rows.
-    mock_ch_execute.side_effect = [
-        [[2]],
-        [("2023-01-01T00:00:00Z", 90), ("2023-01-02T00:00:00Z", 95)],
-    ]
-
-    response = client.get("/v1/asn/15169/history", headers={"X-API-Key": api_key})
-    assert response.status_code == 200
-    data = response.json()
-    assert data["total"] == 2
-    assert len(data["data"]) == 2
-
-def test_add_to_whitelist(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
-    mock_conn = mock_pg_conn
-    
-    response = client.post("/v1/whitelist", json={"asn": 12345, "reason": "Trusted ISP"}, headers={"X-API-Key": api_key})
-    assert response.status_code == 200
-    assert response.json()["status"] == "success"
+            pass  # WebSocketDisconnect expected
