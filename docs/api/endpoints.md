@@ -247,7 +247,7 @@ curl http://localhost:80/api/health
 {
   "status": "healthy",
   "timestamp": "2026-03-29T10:00:00.000000",
-  "version": "7.3.0",
+  "version": "7.4.0",
   "dependencies": {
     "postgres": "up",
     "clickhouse": "up",

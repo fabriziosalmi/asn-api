@@ -79,6 +79,7 @@ Detailed explanation of all response fields and their meanings.
   - Route leaks (`ROUTE_LEAK`): -20
   - Bogon advertisements (`BOGON_AD`): -10
   - Prefix over-deaggregation (`FRAGMENTATION`): -10 (threshold: granularity_score > 50)
+  - Stub-to-transit violations (`STUB_TRANSIT`): -10
   - Zombie ASN — registered but zero active routes: -15
 
 ### breakdown.threat
@@ -88,10 +89,11 @@ Detailed explanation of all response fields and their meanings.
 - **Penalties Applied For**:
   - Spamhaus listing (`THREAT_SPAMHAUS`): -30
   - Botnet C2 hosting (`THREAT_BOTNET`): -20 per host, capped at -40
+  - Phishing domains (`THREAT_PHISHING`): -5 per domain, capped at -20
+  - Malware distribution (`THREAT_MALWARE`): -10 per endpoint, capped at -30
   - High spam emission rate (`THREAT_SPAM`): -15 (threshold: rate > 0.1)
   - Persistent threat recidivism: -10 (threshold: > 5 threat events in 30 days)
   - High WHOIS entropy (obfuscated name): -10 (threshold: entropy > 4.5)
-- **Note**: `phishing_hosting_count` and `malware_distribution_count` appear in the `details` array for visibility but do not directly subtract from this component score.
 
 ### breakdown.stability
 - **Type**: Integer (0-100)

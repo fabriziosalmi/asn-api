@@ -30,6 +30,10 @@ CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
 CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")
 REDIS_URL = os.getenv("BROKER_URL", "redis://broker-cache:6379/0")
 
+# --- Task interval constants ---
+THREAT_INTEL_INTERVAL = 21600   # 6 hours
+ROUTE_LEAK_SCAN_INTERVAL = 300  # 5 minutes
+
 
 class DataIngestor:
     def __init__(self) -> None:
@@ -351,9 +355,13 @@ class DataIngestor:
                                     te,
                                 ),
                             )
-                            _fut.add_done_callback(
-                                lambda f: logger.warning("ch_threat_insert_failed error=%s", f.exception()) if f.exception() else None
-                            )
+
+                            def _log_ch_threat_error(fut):
+                                exc = fut.exception()
+                                if exc:
+                                    logger.warning("ch_threat_insert_failed error=%s", exc)
+
+                            _fut.add_done_callback(_log_ch_threat_error)
                             self.celery_app.send_task(
                                 "tasks.calculate_asn_score", args=[route_asn]
                             )
@@ -370,7 +378,7 @@ class DataIngestor:
             except Exception as e:
                 logger.error("threat_intel_error error=%s", e)
 
-            await asyncio.sleep(21600)
+            await asyncio.sleep(THREAT_INTEL_INTERVAL)
 
     async def scan_noisy_neighbors(self) -> None:
         """Periodically scans for high-volume ASNs and queues them for scoring."""
@@ -462,14 +470,18 @@ class DataIngestor:
                                 _loop = asyncio.get_running_loop()
                                 _fut = _loop.run_in_executor(
                                     None,
-                                    lambda te=threat_event: self.ch_client.execute(
+                                    lambda te=threat_event: self._ch_execute_sync(
                                         "INSERT INTO threat_events (timestamp, asn, source, category, target_ip, description) VALUES",
                                         te,
                                     ),
                                 )
-                                _fut.add_done_callback(
-                                    lambda f: logger.warning("ch_leak_insert_failed error=%s", f.exception()) if f.exception() else None
-                                )
+
+                                def _log_ch_leak_error(fut):
+                                    exc = fut.exception()
+                                    if exc:
+                                        logger.warning("ch_leak_insert_failed error=%s", exc)
+
+                                _fut.add_done_callback(_log_ch_leak_error)
                                 self.celery_app.send_task(
                                     "tasks.calculate_asn_score", args=[asn]
                                 )
@@ -484,7 +496,7 @@ class DataIngestor:
             except Exception as e:
                 logger.error("guard_error error=%s", e)
 
-            await asyncio.sleep(300)
+            await asyncio.sleep(ROUTE_LEAK_SCAN_INTERVAL)
 
     async def start(self) -> None:
         logger.info("ingestor_starting")

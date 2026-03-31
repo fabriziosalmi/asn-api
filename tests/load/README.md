@@ -11,10 +11,10 @@ pip install locust
 docker-compose up -d
 
 # Run with web UI (http://localhost:8089)
-locust -f tests/load/locustfile.py --host http://localhost:8080
+locust -f tests/load/locustfile.py --host http://localhost:80
 
 # Headless mode (CI-friendly)
-locust -f tests/load/locustfile.py --host http://localhost:8080 \
+locust -f tests/load/locustfile.py --host http://localhost:80 \
   --users 50 --spawn-rate 5 --run-time 60s --headless --csv=results
 ```
 

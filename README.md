@@ -492,5 +492,5 @@ This software is licensed under a custom non-commercial license. See the [LICENS
 ---
 
 **Last Updated**: March 2026
-**Version**: 7.3.0
+**Version**: 7.4.0
 **Platform Status**: Production Ready

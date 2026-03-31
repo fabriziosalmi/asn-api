@@ -280,6 +280,8 @@ class RiskScorer:
             penalize("hygiene", 10, "Advertising Bogon Space")
         if s.get("prefix_granularity_score", 0) > 50:
             penalize("hygiene", 10, "High Prefix Fragmentation")
+        if s.get("is_stub_but_transit"):
+            penalize("hygiene", 10, "Stub ASN acting as transit provider")
 
         # --- CATEGORY B: THREAT INTEL ---
         if s.get("spamhaus_listed"):
@@ -290,6 +292,20 @@ class RiskScorer:
                 "threat",
                 min(40, c2_count * 20),
                 f"Hosting {c2_count} Botnet C2 servers",
+            )
+        phishing_count = s.get("phishing_hosting_count", 0)
+        if phishing_count > 0:
+            penalize(
+                "threat",
+                min(20, phishing_count * 5),
+                f"Hosting {phishing_count} phishing domains",
+            )
+        malware_count = s.get("malware_distribution_count", 0)
+        if malware_count > 0:
+            penalize(
+                "threat",
+                min(30, malware_count * 10),
+                f"Hosting {malware_count} malware distribution points",
             )
         if s.get("spam_emission_rate", 0) > 0.1:
             penalize("threat", 15, "High Spambot emission rate")

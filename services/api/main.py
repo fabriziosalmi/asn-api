@@ -115,7 +115,9 @@ end
 # --- Constants ---
 ASN_MIN = 1
 ASN_MAX = 4294967295
-API_VERSION = "7.3.0"
+API_VERSION = "7.4.0"
+STATS_TOTAL_COUNT_CACHE_TTL = 300   # 5 minutes
+PEERINGDB_CACHE_TTL = 86400          # 24 hours
 
 
 # --- Lifespan ---
@@ -704,7 +706,7 @@ async def get_asn_score(
 
     if not total_count_cached and total_count:
         try:
-            await redis_client.setex(cache_key_total, 300, total_count)
+            await redis_client.setex(cache_key_total, STATS_TOTAL_COUNT_CACHE_TTL, total_count)
         except Exception as e:
             logger.warning("stats_cache_write_error", extra={"error": str(e)})
 
@@ -908,16 +910,31 @@ async def compare_asns(
     data_a = next(r for r in rows if r["asn"] == asn_a)
     data_b = next(r for r in rows if r["asn"] == asn_b)
 
+    def _winner(a_val, b_val, asn_a, asn_b):
+        if a_val > b_val:
+            return asn_a
+        if b_val > a_val:
+            return asn_b
+        return None
+
     return {
         "asn_a": dict(data_a),
         "asn_b": dict(data_b),
         "comparison": {
-            "safer_overall": asn_a if data_a["total_score"] > data_b["total_score"] else (asn_b if data_b["total_score"] > data_a["total_score"] else None),
+            "safer_overall": _winner(
+                data_a["total_score"], data_b["total_score"], asn_a, asn_b
+            ),
             "score_diff": abs(data_a["total_score"] - data_b["total_score"]),
-            "better_hygiene": asn_a if data_a["hygiene_score"] > data_b["hygiene_score"] else (asn_b if data_b["hygiene_score"] > data_a["hygiene_score"] else None),
-            "better_threat_profile": asn_a if data_a["threat_score"] > data_b["threat_score"] else (asn_b if data_b["threat_score"] > data_a["threat_score"] else None),
-            "more_stable": asn_a if data_a["stability_score"] > data_b["stability_score"] else (asn_b if data_b["stability_score"] > data_a["stability_score"] else None),
-        }
+            "better_hygiene": _winner(
+                data_a["hygiene_score"], data_b["hygiene_score"], asn_a, asn_b
+            ),
+            "better_threat_profile": _winner(
+                data_a["threat_score"], data_b["threat_score"], asn_a, asn_b
+            ),
+            "more_stable": _winner(
+                data_a["stability_score"], data_b["stability_score"], asn_a, asn_b
+            ),
+        },
     }
 
 
@@ -1243,7 +1260,7 @@ async def get_peeringdb_info(asn: int, api_key: str = Depends(get_api_key)):
                 }
             
             # Cache for 24 hours
-            await redis_client.setex(cache_key, 86400, orjson.dumps(result))
+            await redis_client.setex(cache_key, PEERINGDB_CACHE_TTL, orjson.dumps(result))
             return result
             
     except httpx.RequestError as e:
@@ -1251,7 +1268,12 @@ async def get_peeringdb_info(asn: int, api_key: str = Depends(get_api_key)):
         raise HTTPException(status_code=503, detail="Failed to reach PeeringDB")
 
 @app.get("/v1/tools/domain-risk", tags=["Scoring", "Enrichment"])
-async def get_domain_risk(domain: str = Query(..., description="Domain to analyze (e.g. example.com)", max_length=253), api_key: str = Depends(get_api_key)):
+async def get_domain_risk(
+    domain: str = Query(
+        ..., description="Domain to analyze (e.g. example.com)", max_length=253
+    ),
+    api_key: str = Depends(get_api_key),
+):
     """
     Given a domain, this endpoint resolves its IP, finds the hosting ASN, and returns the infrastructure risk score.
     Critical for Phishing/Malware analysis and SOC investigations.
