@@ -152,10 +152,11 @@ app = FastAPI(
 
 # --- CORS & Compression ---
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+_cors_origins = settings.cors_origins.split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins.split(","),
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials="*" not in _cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1075,7 +1076,7 @@ async def get_asn_history_compat(
     limit: int = 200,
     api_key: str = Depends(get_api_key),
 ):
-    return get_asn_history(asn, days, offset, limit, api_key)
+    return await get_asn_history(asn, days, offset, limit, api_key)
 
 
 @app.post("/whitelist", tags=["System"], include_in_schema=False)
@@ -1086,10 +1087,10 @@ async def add_to_whitelist_compat(
 
 
 @app.post("/tools/bulk-risk-check", tags=["Scoring"], include_in_schema=False)
-def bulk_risk_check_compat(
+async def bulk_risk_check_compat(
     req: BulkAnalysisRequest, api_key: str = Depends(get_api_key)
 ):
-    return bulk_risk_check(req, api_key)
+    return await bulk_risk_check(req, api_key)
 
 
 @app.get(
@@ -1098,8 +1099,8 @@ def bulk_risk_check_compat(
     tags=["Scoring"],
     include_in_schema=False,
 )
-def get_peer_pressure_compat(asn: int, api_key: str = Depends(get_api_key)):
-    return get_peer_pressure(asn, api_key)
+async def get_peer_pressure_compat(asn: int, api_key: str = Depends(get_api_key)):
+    return await get_peer_pressure(asn, api_key)
 
 @app.get("/feeds/edl", tags=["Integrations"])
 async def get_edl_feed(max_score: float = Query(50.0, ge=0.0, le=100.0)):
@@ -1201,6 +1202,7 @@ async def get_peeringdb_info(asn: int, api_key: str = Depends(get_api_key)):
     Fetch and cache PeeringDB metadata for a given ASN.
     Provides business context like ASN Type (ISP, Content), IXP presence, and Facilities.
     """
+    _validate_asn(asn)
     cache_key = f"peeringdb:asn:{asn}"
     try:
         # Check cache First
@@ -1243,7 +1245,7 @@ async def get_peeringdb_info(asn: int, api_key: str = Depends(get_api_key)):
         raise HTTPException(status_code=503, detail="Failed to reach PeeringDB")
 
 @app.get("/v1/tools/domain-risk", tags=["Scoring", "Enrichment"])
-async def get_domain_risk(domain: str = Query(..., description="Domain to analyze (e.g. example.com)"), api_key: str = Depends(get_api_key)):
+async def get_domain_risk(domain: str = Query(..., description="Domain to analyze (e.g. example.com)", max_length=253), api_key: str = Depends(get_api_key)):
     """
     Given a domain, this endpoint resolves its IP, finds the hosting ASN, and returns the infrastructure risk score.
     Critical for Phishing/Malware analysis and SOC investigations.

@@ -1,13 +1,47 @@
+# Python
 __pycache__/
-*.pyc
-.env
-.DS_Store
+*.py[cod]
+*.pyd
+*.pyo
+*.pyw
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual envs
+.venv
 venv/
+env/
+
+# Env / secrets
+.env
+*.env.local
+
+# IDE
 .idea/
 .vscode/
-.venv
-venv
+*.swp
+*.swo
+.DS_Store
 
+# Test & coverage artefacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+.tox/
 
+# One-off fix/verify scripts (never commit to main)
+fix_*.py
+verify_*.py
 
+# Temporary test files at repo root (real tests live in tests/)
+test_*.py
+
+# Misc
 IDEAS.md
+*.log
+*.sqlite3
+*.db

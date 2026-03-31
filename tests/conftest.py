@@ -39,6 +39,10 @@ with patch("redis.asyncio.Redis"), patch("sqlalchemy.create_engine"), patch(
 
 @pytest.fixture(autouse=True)
 def mock_dependencies():
+    # Clear the module-level L1 in-memory cache so tests don't interfere with each other
+    from api.main import l1_cache
+    l1_cache.clear()
+
     mock_redis = AsyncMock()
     mock_redis.get = AsyncMock(return_value=None)
     mock_redis.setex = AsyncMock(return_value=True)
