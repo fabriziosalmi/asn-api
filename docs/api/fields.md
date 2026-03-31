@@ -46,8 +46,8 @@ Detailed explanation of all response fields and their meanings.
 - **Values**: `"LOW"`, `"MEDIUM"`, `"HIGH"`, `"CRITICAL"`
 - **Mapping**:
   - `LOW`: score >= 90
-  - `MEDIUM`: 75 <= score < 90
-  - `HIGH`: 50 <= score < 75
+  - `MEDIUM`: 70 <= score < 90
+  - `HIGH`: 50 <= score < 70
   - `CRITICAL`: score < 50
 
 ### last_updated

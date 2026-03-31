@@ -1,5 +1,6 @@
 # Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
 # Tests use realistic production-grade ASN data (Google/Cloudflare/RIPE NCC/M247)
+import orjson
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -497,20 +498,21 @@ def test_add_to_whitelist(client, api_key, mock_dependencies):
 # ---------------------------------------------------------------------------
 
 def test_websocket_auth_fail(client):
-    try:
-        with client.websocket_connect("/v1/stream"):
-            pass
-    except Exception:
-        assert True
+    """Connecting without an api_key query param must be rejected."""
+    import pytest
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises((WebSocketDisconnect, Exception)):
+        with client.websocket_connect("/v1/stream") as ws:
+            ws.receive_text()
 
 
 def test_websocket_wrong_key_rejected(client):
-    try:
+    """Connecting with a wrong api_key must be rejected before any data is sent."""
+    import pytest
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises((WebSocketDisconnect, Exception)):
         with client.websocket_connect("/v1/stream?api_key=WRONG_KEY") as ws:
             ws.receive_text()
-            assert False, "Should have been disconnected"
-    except Exception:
-        pass
 
 
 def test_websocket_stream_receives_message(client, api_key, mock_dependencies):
@@ -568,15 +570,22 @@ def test_websocket_queue_overflow_disconnects_client(client, api_key, mock_depen
 # L2 cache hit — Redis returns pre-serialised ASN data (lines 631-642)
 # ---------------------------------------------------------------------------
 
-import orjson
-
 
 def test_get_asn_score_redis_cache_hit(client, api_key, mock_dependencies):
     """When Redis has a cached score, the endpoint should return it directly."""
-    import orjson as _orjson
     mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
 
     cached_payload = {
+        "asn": 15169,
+        "name": "GOOGLE",
+        "country_code": "US",
+        "registry": "arin",
+        "risk_score": 98,
+        "risk_level": "LOW",
+        "rank_percentile": 99.0,
+        "downstream_score": 95,
+        "last_updated": "2024-01-15T10:30:00",
+        "breakdown": {"hygiene": 99, "threat": 98, "stability": 97},
         "asn": 15169,
         "name": "GOOGLE",
         "country_code": "US",
@@ -615,7 +624,7 @@ def test_get_asn_score_redis_cache_hit(client, api_key, mock_dependencies):
         },
         "details": [],
     }
-    mock_redis.get.return_value = _orjson.dumps(cached_payload)
+    mock_redis.get.return_value = orjson.dumps(cached_payload)
 
     response = client.get("/v1/asn/15169", headers={"X-API-Key": api_key})
     assert response.status_code == 200
@@ -773,11 +782,10 @@ def test_peeringdb_not_found(mock_client_cls, client, api_key, mock_dependencies
 
 def test_peeringdb_redis_cache_hit(client, api_key, mock_dependencies):
     """When Redis has PeeringDB data it is returned without hitting the upstream."""
-    import orjson as _orjson
     mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
 
     cached = {"asn": 15169, "found": True, "peeringdb_data": {"type": "Content"}}
-    mock_redis.get.return_value = _orjson.dumps(cached)
+    mock_redis.get.return_value = orjson.dumps(cached)
 
     response = client.get("/v1/asn/15169/peeringdb", headers={"X-API-Key": api_key})
     assert response.status_code == 200
@@ -1006,7 +1014,7 @@ def test_get_asn_score_no_peeringdb_penalty(client, api_key, mock_dependencies):
 
 
 # ---------------------------------------------------------------------------
-# UNKNOWN risk_level → LOW/MEDIUM remap branch (score >= 75)  line 708-709
+# UNKNOWN risk_level → LOW/MEDIUM remap branch (score >= 70)  line 708-709
 # ---------------------------------------------------------------------------
 
 def test_get_asn_score_unknown_risk_becomes_low(client, api_key, mock_dependencies):
@@ -1029,13 +1037,13 @@ def test_get_asn_score_unknown_risk_becomes_low(client, api_key, mock_dependenci
 
 
 def test_get_asn_score_unknown_risk_becomes_medium(client, api_key, mock_dependencies):
-    """risk_level=UNKNOWN + 75 <= score < 90 → 'MEDIUM'."""
+    """risk_level=UNKNOWN + 70 <= score < 90 → 'MEDIUM'."""
     mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
     mock_redis.get.return_value = None
 
     row = dict(ASN_15169_GOOGLE)
     row["risk_level"] = "UNKNOWN"
-    row["total_score"] = 80  # >= 75 and < 90 → MEDIUM
+    row["total_score"] = 80  # >= 70 and < 90 → MEDIUM
 
     scalar_mock = MagicMock()
     scalar_mock.scalar.side_effect = [75_000, 60_000]
@@ -1053,7 +1061,6 @@ def test_get_asn_score_unknown_risk_becomes_medium(client, api_key, mock_depende
 
 def test_get_asn_score_etag_304(client, api_key, mock_dependencies):
     """If-None-Match matching the current ETag must return 304."""
-    import orjson as _orjson
     mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
 
     payload = {
@@ -1095,7 +1102,7 @@ def test_get_asn_score_etag_304(client, api_key, mock_dependencies):
         },
         "details": [],
     }
-    mock_redis.get.return_value = _orjson.dumps(payload)
+    mock_redis.get.return_value = orjson.dumps(payload)
 
     # First call to discover the ETag
     r1 = client.get("/v1/asn/15169", headers={"X-API-Key": api_key})

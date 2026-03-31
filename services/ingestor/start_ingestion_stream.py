@@ -1,8 +1,10 @@
 # Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
 
 import asyncio
+import ipaddress
 import os
 import random
+import re
 import threading
 import time
 import json
@@ -221,9 +223,6 @@ class DataIngestor:
 
     async def fetch_threat_intelligence(self) -> None:
         """Fetches REAL Threat Intel Feeds and correlates them. Runs every 6 hours."""
-        import re
-        import ipaddress
-
         logger.info("threat_intel_start")
 
         while self.running:
@@ -272,7 +271,7 @@ class DataIngestor:
                     )
                     if r.status_code == 200:
                         found_ips = re.findall(
-                            r"http://(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", r.text
+                            r"https?://(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", r.text
                         )
                         for ip in found_ips:
                             threat_ips.add(ip)

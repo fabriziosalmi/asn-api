@@ -212,8 +212,8 @@ The platform uses a multi-factor scoring model analyzing 30+ signals across four
 | Score Range | Risk Level | Interpretation |
 |-------------|-----------|----------------|
 | **90-100** | LOW | Highly trusted, minimal security concerns |
-| **75-89** | MEDIUM | Generally reliable with minor issues |
-| **50-74** | HIGH | Significant concerns, use with caution |
+| **70-89** | MEDIUM | Generally reliable with minor issues |
+| **50-69** | HIGH | Significant concerns, use with caution |
 | **0-49** | CRITICAL | High-risk network, avoid if possible |
 
 ## Configuration
@@ -388,7 +388,7 @@ asn-api/
     db-metadata/init.sql    # PostgreSQL schema + indexes
     db-timeseries/init.sql  # ClickHouse schema + TTL policies
   tests/
-    test_api.py             # 67 API tests
+    test_api.py             # 65 API tests
     test_scorer.py          # 2 scorer tests (exercise real _apply_scoring_rules)
     load/locustfile.py      # Load tests
   docs/                     # VitePress documentation

@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException, Security, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import ORJSONResponse, PlainTextResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -705,8 +705,8 @@ async def get_asn_score(
     if not total_count_cached and total_count:
         try:
             await redis_client.setex(cache_key_total, 300, total_count)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("stats_cache_write_error", extra={"error": str(e)})
 
     percentile = (count_lower / total_count * 100.0) if total_count > 0 else 0.0
 
@@ -715,7 +715,7 @@ async def get_asn_score(
         level = (
             "CRITICAL"
             if score < 50
-            else "HIGH" if score < 75 else "MEDIUM" if score < 90 else "LOW"
+            else "HIGH" if score < 70 else "MEDIUM" if score < 90 else "LOW"
         )
 
     details = generate_penalty_details(result)
@@ -884,7 +884,7 @@ async def compare_asns(
     Compare two ASNs side-by-side to understand relative risk profiles.
     Returns a delta indicating which ASN is safer across different dimensions.
     """
-    if asn_a <= 0 or asn_a > 4294967295 or asn_b <= 0 or asn_b > 4294967295:
+    if asn_a <= 0 or asn_a > ASN_MAX or asn_b <= 0 or asn_b > ASN_MAX:
         raise HTTPException(status_code=400, detail="Invalid ASN number")
 
     query = text("""
@@ -1116,8 +1116,6 @@ async def get_edl_feed(max_score: float = Query(50.0, ge=0.0, le=100.0)):
     Returns a plaintext list of ASNs (ASXXXX) below the maximum given risk score.
     """
     try:
-        from fastapi.responses import PlainTextResponse
-        
         async def _fetch_edl():
             async with pg_engine.begin() as conn:
                 result = await conn.execute(
@@ -1130,8 +1128,7 @@ async def get_edl_feed(max_score: float = Query(50.0, ge=0.0, le=100.0)):
         edl_lines = await _fetch_edl()
         return PlainTextResponse("\n".join(edl_lines))
     except Exception as e:
-        logger.error(f"edl_generation_error: {e}")
-        from fastapi.responses import PlainTextResponse
+        logger.error("edl_generation_error", extra={"error": str(e)})
         return PlainTextResponse("", status_code=500)
 @app.websocket("/v1/stream")
 async def websocket_firehose(websocket: WebSocket, api_key: str = Query(...)):
@@ -1172,7 +1169,7 @@ async def websocket_firehose(websocket: WebSocket, api_key: str = Query(...)):
 
     async def _consumer() -> None:
         """Drain the queue to the WebSocket with per-send timeout and heartbeat."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         last_ping = loop.time()
         while True:
             now = loop.time()
@@ -1248,7 +1245,7 @@ async def get_peeringdb_info(asn: int, api_key: str = Depends(get_api_key)):
             return result
             
     except httpx.RequestError as e:
-        logger.error(f"peeringdb_fetch_error_log", extra={"asn": asn, "error": str(e)})
+        logger.error("peeringdb_fetch_error", extra={"asn": asn, "error": str(e)})
         raise HTTPException(status_code=503, detail="Failed to reach PeeringDB")
 
 @app.get("/v1/tools/domain-risk", tags=["Scoring", "Enrichment"])

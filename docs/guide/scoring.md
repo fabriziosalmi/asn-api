@@ -15,8 +15,8 @@ Each component starts at 100 and receives penalties based on detected signals.
 | Score Range | Level | Interpretation |
 |-------------|-------|----------------|
 | 90-100 | LOW | Trusted, no significant issues |
-| 75-89 | MEDIUM | Minor concerns, monitor |
-| 50-74 | HIGH | Significant risk factors |
+| 70-89 | MEDIUM | Minor concerns, monitor |
+| 50-69 | HIGH | Significant risk factors |
 | 0-49 | CRITICAL | Known malicious or severely compromised |
 
 ## Hygiene Score (40%)

@@ -42,6 +42,7 @@ interface AllSignals {
   hygiene: HygieneSignals
   threats: ThreatSignals
   metadata: MetadataSignals
+  forensics: ForensicsSignals
 }
 ```
 
@@ -84,10 +85,8 @@ interface MetadataSignals {
 
 ```typescript
 interface ForensicsSignals {
-  ddos_blackhole_count: number    // Prefixes blackholed by upstreams (>5 triggers penalty)
-  excessive_prepending_count: number  // AS paths with >3x prepend (>10 triggers penalty)
-  whois_entropy: number | null    // Shannon entropy of WHOIS data (low = suspicious)
-  is_zombie_asn: boolean          // True if ASN appears in BGP but has no current registrations
+  ddos_blackhole_count: number       // Prefixes blackholed by upstreams (>5 triggers penalty)
+  excessive_prepending_count: number // AS paths with >3x prepend (>10 triggers penalty)
 }
 ```
 

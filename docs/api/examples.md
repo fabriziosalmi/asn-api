@@ -132,7 +132,7 @@ curl -s -X POST \
   http://localhost:80/api/v1/tools/bulk-risk-check | \
   jq -r '.results[] | select(.score != null) | 
     if .score < 50 then "CRITICAL"
-    elif .score < 75 then "HIGH"
+    elif .score < 70 then "HIGH"
     elif .score < 90 then "MEDIUM"
     else "LOW" end + 
     " \(.name) (AS\(.asn)): \(.score)"' | \

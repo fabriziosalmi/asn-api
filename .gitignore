@@ -49,3 +49,6 @@ IDEAS.md
 # VitePress build output
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+
+RULES.md
