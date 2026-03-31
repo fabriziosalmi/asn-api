@@ -61,6 +61,19 @@ class AsnApiClient:
         """Perform a risk check on multiple ASNs simultaneously."""
         return self._request("POST", "v1/tools/bulk-risk-check", json={"asns": asns})
 
+    def compare(self, asn_a: int, asn_b: int) -> Dict[str, Any]:
+        """Compare two ASNs side-by-side to understand relative risk profiles."""
+        params = {"asn_a": asn_a, "asn_b": asn_b}
+        return self._request("GET", "v1/tools/compare", params=params)
+
+    def get_peeringdb(self, asn: int) -> Dict[str, Any]:
+        """Fetch PeeringDB metadata (ASN type, IXP count, facilities) for a specific ASN."""
+        return self._request("GET", f"v1/asn/{asn}/peeringdb")
+
+    def get_domain_risk(self, domain: str) -> Dict[str, Any]:
+        """Analyze a domain finding its hosting IP and the underlying ASN risk score."""
+        return self._request("GET", "v1/tools/domain-risk", params={"domain": domain})
+
     def get_edl(self, max_score: float = 50.0) -> str:
         """Get an External Dynamic List (EDL) of malicious ASNs for firewalls in plain text."""
         params = {"max_score": max_score}

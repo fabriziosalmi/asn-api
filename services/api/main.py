@@ -3,6 +3,9 @@
 import json
 import time
 import orjson
+import httpx
+import socket
+import dns.resolver
 import hashlib
 from cachetools import TTLCache
 import logging
@@ -10,7 +13,7 @@ import urllib.parse
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Security, Depends, Request, Response, Query
+from fastapi import FastAPI, HTTPException, Security, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -829,6 +832,52 @@ async def add_to_whitelist(
         raise HTTPException(status_code=500, detail="Failed to update whitelist")
 
 
+@app.get("/v1/tools/compare", tags=["Scoring"])
+def compare_asns(
+    asn_a: int = Query(..., description="First ASN to compare"),
+    asn_b: int = Query(..., description="Second ASN to compare"),
+    api_key: str = Depends(get_api_key)
+):
+    """
+    Compare two ASNs side-by-side to understand relative risk profiles.
+    Returns a delta indicating which ASN is safer across different dimensions.
+    """
+    if asn_a <= 0 or asn_a > 4294967295 or asn_b <= 0 or asn_b > 4294967295:
+        raise HTTPException(status_code=400, detail="Invalid ASN number")
+
+    query = text("""
+        SELECT r.asn, r.name, r.country_code,
+               r.total_score, r.risk_level, 
+               r.hygiene_score, r.threat_score, r.stability_score
+        FROM asn_registry r
+        WHERE r.asn IN (:asn_a, :asn_b)
+    """)
+
+    with pg_engine.connect() as conn:
+        rows = conn.execute(query, {"asn_a": asn_a, "asn_b": asn_b}).mappings().fetchall()
+    
+    if len(rows) != 2:
+        found_asns = [r["asn"] for r in rows]
+        missing = [a for a in (asn_a, asn_b) if a not in found_asns]
+        raise HTTPException(status_code=404, detail=f"ASNs not found: {missing}")
+
+    # Map results
+    data_a = next(r for r in rows if r["asn"] == asn_a)
+    data_b = next(r for r in rows if r["asn"] == asn_b)
+
+    return {
+        "asn_a": dict(data_a),
+        "asn_b": dict(data_b),
+        "comparison": {
+            "safer_overall": asn_a if data_a["total_score"] > data_b["total_score"] else (asn_b if data_b["total_score"] > data_a["total_score"] else None),
+            "score_diff": abs(data_a["total_score"] - data_b["total_score"]),
+            "better_hygiene": asn_a if data_a["hygiene_score"] > data_b["hygiene_score"] else (asn_b if data_b["hygiene_score"] > data_a["hygiene_score"] else None),
+            "better_threat_profile": asn_a if data_a["threat_score"] > data_b["threat_score"] else (asn_b if data_b["threat_score"] > data_a["threat_score"] else None),
+            "more_stable": asn_a if data_a["stability_score"] > data_b["stability_score"] else (asn_b if data_b["stability_score"] > data_a["stability_score"] else None),
+        }
+    }
+
+
 @app.post("/v1/tools/bulk-risk-check", tags=["Scoring"])
 def bulk_risk_check(
     req: BulkAnalysisRequest, api_key: str = Depends(get_api_key)
@@ -1038,3 +1087,131 @@ def get_edl_feed(max_score: float = Query(50.0, ge=0.0, le=100.0)):
         logger.error(f"edl_generation_error: {e}")
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse("", status_code=500)
+@app.websocket("/v1/stream")
+async def websocket_firehose(websocket: WebSocket, api_key: str = Query(...)):
+    """
+    Real-time firehose of ASN score updates using Server-Sent Events or WebSockets.
+    """
+    await websocket.accept()
+    # Simple auth check for websocket
+    if not api_key:
+        await websocket.close(code=1008)
+        return
+
+    # Subscribe to Redis
+    pubsub = redis_client.pubsub()
+    await pubsub.subscribe("events:asn_updates")
+    
+    try:
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                await websocket.send_text(message["data"])
+    except WebSocketDisconnect:
+        logger.info("Client disconnected from firehose.")
+    finally:
+        await pubsub.unsubscribe("events:asn_updates")
+
+
+@app.get("/v1/asn/{asn}/peeringdb", tags=["Enrichment"])
+async def get_peeringdb_info(asn: int, api_key: str = Depends(get_api_key)):
+    """
+    Fetch and cache PeeringDB metadata for a given ASN.
+    Provides business context like ASN Type (ISP, Content), IXP presence, and Facilities.
+    """
+    cache_key = f"peeringdb:asn:{asn}"
+    try:
+        # Check cache First
+        cached_data = await redis_client.get(cache_key)
+        if cached_data:
+            return orjson.loads(cached_data)
+
+        # Fetch from PeeringDB (no auth required for public data)
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"https://www.peeringdb.com/api/net?asn={asn}")
+            
+            if resp.status_code != 200:
+                raise HTTPException(status_code=502, detail="Upstream PeeringDB error")
+                
+            data = resp.json()
+            
+            if not data.get("data"):
+                result = {"asn": asn, "found": False, "peeringdb_data": None}
+            else:
+                pdb = data["data"][0]
+                result = {
+                    "asn": asn,
+                    "found": True,
+                    "peeringdb_data": {
+                        "name": pdb.get("name"),
+                        "type": pdb.get("info_type"),
+                        "website": pdb.get("website"),
+                        "ix_count": pdb.get("ix_count", 0),
+                        "fac_count": pdb.get("fac_count", 0),
+                        "peering_policy": pdb.get("policy_general")
+                    }
+                }
+            
+            # Cache for 24 hours
+            await redis_client.setex(cache_key, 86400, orjson.dumps(result))
+            return result
+            
+    except httpx.RequestError as e:
+        logger.error(f"peeringdb_fetch_error_log", extra={"asn": asn, "error": str(e)})
+        raise HTTPException(status_code=503, detail="Failed to reach PeeringDB")
+
+@app.get("/v1/tools/domain-risk", tags=["Scoring", "Enrichment"])
+def get_domain_risk(domain: str = Query(..., description="Domain to analyze (e.g. example.com)"), api_key: str = Depends(get_api_key)):
+    """
+    Given a domain, this endpoint resolves its IP, finds the hosting ASN, and returns the infrastructure risk score.
+    Critical for Phishing/Malware analysis and SOC investigations.
+    """
+    try:
+        # Step 1: Resolve Domain to IP
+        ip_address = socket.gethostbyname(domain)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail=f"Could not resolve domain: {domain}")
+
+    # Step 2: Resolve IP to ASN via Cymru
+    reversed_ip = '.'.join(reversed(ip_address.split('.')))
+    query_str = f"{reversed_ip}.origin.asn.cymru.com"
+    
+    asn = None
+    try:
+        answers = dns.resolver.resolve(query_str, 'TXT')
+        for rdata in answers:
+            txt = rdata.to_text().strip('"')
+            # Extract ASN, handle multiple ASNs like "13335 13335" by picking the first
+            asn_str = txt.split('|')[0].strip()
+            asn = int(asn_str.split()[0])
+            break
+    except Exception as e:
+        logger.warning("cymru_resolution_failed", extra={"ip": ip_address, "error": str(e)})
+        
+    if not asn:
+        return {
+            "domain": domain,
+            "resolved_ip": ip_address,
+            "asn": None,
+            "error": "Could not map IP to an ASN"
+        }
+
+    # Step 3: Fetch Risk Data from our DB
+    query_db = text("""
+        SELECT r.asn, r.name, r.country_code,
+               r.total_score, r.risk_level, 
+               r.hygiene_score, r.threat_score, r.stability_score
+        FROM asn_registry r
+        WHERE r.asn = :asn
+    """)
+
+    with pg_engine.connect() as conn:
+        row = conn.execute(query_db, {"asn": asn}).mappings().fetchone()
+    
+    asn_data = dict(row) if row else {"asn": asn, "status": "Not scored yet"}
+
+    return {
+        "domain": domain,
+        "resolved_ip": ip_address,
+        "asn": asn,
+        "infrastructure_risk": asn_data
+    }
