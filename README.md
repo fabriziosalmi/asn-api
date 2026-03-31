@@ -53,12 +53,16 @@ Wait 2-3 minutes for initial data ingestion and database initialization. Then ac
 ### System Design
 
 ```
-Internet --> Nginx (80) --> api (8000) --> PostgreSQL (State)
-             |          --> grafana (3000)
-             |
-BGP Stream --> ingestor --> ClickHouse (History) <-- engine (Worker)
-                                                       |
-                                                    Redis (Cache + Queue)
+Internet ─────────────────────────────────────────────────────────────
+  │                                                                  │
+  ▼ HTTP                                                             ▼ WebSocket
+Nginx (80) ──► api (8000) ──► PostgreSQL (State)         ws://host/api/v1/stream
+  │                │                                                  │
+  └──► Grafana    └──► Redis L2 Cache ◄────── engine (Worker)        │
+        (3000)         Redis Pub/Sub ─────────────────────────────────┘
+                             │
+BGP Stream ──► ingestor ──► ClickHouse (History) ◄── engine
+               + Threat feeds
 ```
 
 ### Technology Stack
@@ -86,8 +90,13 @@ All API endpoints require an API key passed via the `X-API-Key` header.
 | `GET` | `/v1/asn/{asn}` | Detailed risk score card |
 | `GET` | `/v1/asn/{asn}/history?days=30&offset=0&limit=200` | Paginated score history |
 | `GET` | `/v1/asn/{asn}/upstreams` | Upstream risk analysis |
+| `GET` | `/v1/asn/{asn}/peeringdb` | PeeringDB metadata (cached 24h) |
+| `GET` | `/v1/tools/compare?asn_a=X&asn_b=Y` | Side-by-side ASN comparison |
+| `GET` | `/v1/tools/domain-risk?domain=X` | Resolve domain → ASN → risk score |
 | `POST` | `/v1/tools/bulk-risk-check` | Bulk analysis (max 1000 ASNs) |
 | `POST` | `/v1/whitelist` | Add ASN to whitelist |
+| `GET` | `/feeds/edl` | Firewall EDL feed (plain text, no auth) |
+| `WebSocket` | `/v1/stream?api_key=X` | Real-time score update firehose |
 | `GET` | `/health` | Health check (no auth) |
 | `GET` | `/api/docs` | Swagger UI |
 | `GET` | `/api/redoc` | ReDoc |
@@ -106,6 +115,22 @@ curl -H "X-API-Key: $API_KEY" "http://localhost/api/v1/asn/15169/history?days=7&
 # Bulk analysis
 curl -X POST -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{"asns": [15169, 13335, 3356]}' http://localhost/api/v1/tools/bulk-risk-check
+
+# Compare two ASNs side-by-side
+curl -H "X-API-Key: $API_KEY" "http://localhost/api/v1/tools/compare?asn_a=15169&asn_b=3356"
+
+# Resolve domain → ASN → infrastructure risk
+curl -H "X-API-Key: $API_KEY" "http://localhost/api/v1/tools/domain-risk?domain=suspicious.example.com"
+
+# PeeringDB metadata for an ASN
+curl -H "X-API-Key: $API_KEY" http://localhost/api/v1/asn/15169/peeringdb
+
+# Firewall EDL feed (no auth required, plain-text ASN list)
+curl http://localhost/api/feeds/edl
+curl "http://localhost/api/feeds/edl?max_score=49"  # CRITICAL only
+
+# Real-time score stream (WebSocket)
+wscat -c "ws://localhost/api/v1/stream?api_key=$API_KEY"
 ```
 
 ### Response Headers
@@ -244,7 +269,7 @@ Materialized views for real-time aggregation: `bgp_daily_mv`, `threat_daily_mv`,
 | BGP Events | 90 days | ClickHouse (partitioned) |
 | Threat Events | 180 days | ClickHouse |
 | API Request Logs | 30 days | ClickHouse |
-| Score History | 365 days | ClickHouse |
+| Score History | Indefinite | ClickHouse (no TTL, retained for trending) |
 | Daily Metrics | Indefinite | ClickHouse (aggregated) |
 | Current Scores | Persistent | PostgreSQL |
 
@@ -363,7 +388,7 @@ asn-api/
     db-metadata/init.sql    # PostgreSQL schema + indexes
     db-timeseries/init.sql  # ClickHouse schema + TTL policies
   tests/
-    test_api.py             # 65 API tests
+    test_api.py             # 67 API tests
     test_scorer.py          # 2 scorer tests (exercise real _apply_scoring_rules)
     load/locustfile.py      # Load tests
   docs/                     # VitePress documentation
@@ -390,11 +415,12 @@ Every request gets a `X-Trace-ID` that propagates from the API through Celery ta
 
 ### Grafana Dashboards
 
-4 pre-built dashboards at http://localhost/dashboard/:
+5 pre-built dashboards at http://localhost/dashboard/:
 1. **Mission Control** - Real-time BGP activity and threat detection
 2. **System Health** - Ingestion rates and database metrics
 3. **Network Topology** - AS connections and top active ASNs
 4. **API Performance** - Request rate, latency percentiles, cache hit rate
+5. **Forensics** - BGP event rates, threat signal trends, prepending/blackhole analysis
 
 ### Cache Invalidation
 
@@ -426,6 +452,21 @@ Atomic rate limiting via Redis Lua script. Configurable per-IP limit with RFC-co
 - **Swagger UI**: http://localhost:80/api/docs
 - **ReDoc**: http://localhost:80/api/redoc
 - **Local VitePress**: `cd docs && npm install && npm run dev`
+
+### VitePress Sections
+
+| Section | Topics |
+|---------|--------|
+| Guide → Quick Start | Docker launch, first requests |
+| Guide → Configuration | All environment variables |
+| Guide → Scoring Model | Weights, penalties, risk levels |
+| Guide → Signals | Every signal field explained |
+| Guide → Integrations | Palo Alto EDL, FortiGate, WebSocket consumers, SIEM |
+| API → Endpoints | All 12 routes with request/response examples |
+| API → Field Reference | Every field with penalty code table |
+| API → Response Schema | TypeScript interfaces for all response types |
+| Architecture → Overview | Two-tier cache, event bus, rate limiting, tracing |
+| Architecture → Database | Full PostgreSQL + ClickHouse schema |
 
 ### Additional Files
 
