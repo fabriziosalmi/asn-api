@@ -9,6 +9,10 @@
     "preview": "vitepress preview"
   },
   "devDependencies": {
-    "vitepress": "^1.0.0"
+    "vitepress": "^1.6.4"
+  },
+  "overrides": {
+    "rollup": ">=4.59.0",
+    "esbuild": ">=0.25.0"
   }
 }
