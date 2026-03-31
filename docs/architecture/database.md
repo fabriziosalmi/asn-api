@@ -10,17 +10,19 @@ Primary table for ASN information and current scores.
 
 ```sql
 CREATE TABLE asn_registry (
-    asn             BIGINT PRIMARY KEY,
-    name            VARCHAR(255),
-    country_code    CHAR(2),
-    registry        VARCHAR(50),
-    total_score     INTEGER DEFAULT 100,
-    hygiene_score   INTEGER DEFAULT 100,
-    threat_score    INTEGER DEFAULT 100,
-    stability_score INTEGER DEFAULT 100,
-    risk_level      VARCHAR(20) DEFAULT 'UNKNOWN',
-    created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    last_scored_at  TIMESTAMP WITH TIME ZONE
+    asn                  BIGINT PRIMARY KEY,
+    name                 VARCHAR(255),
+    country_code         CHAR(2),
+    registry             VARCHAR(50),
+    total_score          INTEGER DEFAULT 100,
+    hygiene_score        INTEGER DEFAULT 100,
+    threat_score         INTEGER DEFAULT 100,
+    stability_score      INTEGER DEFAULT 100,
+    downstream_score     INTEGER DEFAULT 100,
+    whois_entropy_score  INTEGER DEFAULT 100,
+    risk_level           VARCHAR(20) DEFAULT 'UNKNOWN',
+    created_at           TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_scored_at       TIMESTAMP WITH TIME ZONE
 );
 
 CREATE INDEX idx_asn_score ON asn_registry(total_score);
@@ -47,6 +49,10 @@ CREATE TABLE asn_signals (
     has_peeringdb_profile      BOOLEAN DEFAULT FALSE,
     upstream_tier1_count       INTEGER DEFAULT 0,
     is_whois_private           BOOLEAN DEFAULT FALSE,
+    is_zombie_asn              BOOLEAN DEFAULT FALSE,
+    whois_entropy              NUMERIC(10,5),
+    ddos_blackhole_count       INTEGER DEFAULT 0,
+    excessive_prepending_count INTEGER DEFAULT 0,
     updated_at                 TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 ```
@@ -82,7 +88,8 @@ CREATE TABLE bgp_events (
     upstream_as  UInt32
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
-ORDER BY (asn, timestamp);
+ORDER BY (asn, timestamp)
+TTL timestamp + INTERVAL 90 DAY;
 ```
 
 ### threat_events
@@ -99,12 +106,13 @@ CREATE TABLE threat_events (
     severity     UInt8
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
-ORDER BY (asn, timestamp);
+ORDER BY (asn, timestamp)
+TTL timestamp + INTERVAL 180 DAY;
 ```
 
 ### asn_score_history
 
-Historical score records.
+Historical score records. **No TTL** — retained indefinitely for trending analysis.
 
 ```sql
 CREATE TABLE asn_score_history (
@@ -114,6 +122,39 @@ CREATE TABLE asn_score_history (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (asn, timestamp);
+-- No TTL: score history is retained indefinitely
+```
+
+### api_requests
+
+API access log for audit and analytics.
+
+```sql
+CREATE TABLE api_requests (
+    timestamp    DateTime,
+    asn          UInt32,
+    api_key_hash String,
+    response_ms  UInt32,
+    cache_hit    UInt8
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp, asn)
+TTL timestamp + INTERVAL 30 DAY;
+```
+
+### forensic_metrics
+
+Aggregated forensic signal data.
+
+```sql
+CREATE TABLE forensic_metrics (
+    day                       Date,
+    asn                       UInt32,
+    ddos_blackhole_count      UInt32,
+    excessive_prepending_count UInt32
+) ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(day)
+ORDER BY (asn, day);
 ```
 
 ### bgp_daily_mv

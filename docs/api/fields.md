@@ -75,31 +75,36 @@ Detailed explanation of all response fields and their meanings.
 - **Weight**: 40% of total score
 - **Description**: Routing best practices and protocol compliance
 - **Penalties Applied For**:
-  - RPKI invalid routes (-30)
-  - High RPKI unknown percentage (-10)
-  - Route leaks (-25)
-  - Bogon advertisements (-40)
-  - Stub-to-transit violations (-20)
+  - RPKI invalid routes (`RPKI_INVALID`): -20
+  - High RPKI unknown percentage (`RPKI_UNKNOWN`): -10
+  - Route leaks (`ROUTE_LEAK`): -20
+  - Bogon advertisements (`BOGON_AD`): -10
+  - Stub-to-transit violations (`STUB_TRANSIT`): -15
+  - Missing PeeringDB profile (`META_NO_PDB`): -5
+  - No Tier-1 upstream (`META_NO_TIER1`): -5
+  - Private/non-routable WHOIS (`META_PRIVATE`): -5
 
 ### breakdown.threat
 - **Type**: Integer (0-100)
 - **Weight**: 35% of total score
 - **Description**: Association with malicious infrastructure
 - **Penalties Applied For**:
-  - Spamhaus listing (-50)
-  - Botnet C2 hosting (-10 per host)
-  - Phishing domains (-5 per domain)
-  - Malware distribution (-10 per sample)
-  - High spam rate (-20)
+  - Spamhaus listing (`THREAT_SPAMHAUS`): -30
+  - Botnet C2 hosting (`THREAT_BOTNET`): -20 per host, capped at -40
+  - Phishing domains (`THREAT_PHISHING`): -5 per domain
+  - Malware distribution (`THREAT_MALWARE`): -10 per sample
+  - High spam emission rate (`THREAT_SPAM`): -15 (threshold: rate > 0.1)
 
 ### breakdown.stability
 - **Type**: Integer (0-100)
 - **Weight**: 25% of total score
 - **Description**: Operational reliability and BGP behavior
 - **Penalties Applied For**:
-  - High route churn (-20)
-  - Withdrawal spikes (-15)
-  - Path instability (-10)
+  - High route churn: -25
+  - Withdrawal spikes: -15
+  - Path instability: -10
+  - DDoS blackhole targeting (>5 events/7d): -15
+  - Excessive AS-PATH prepending (>10 events/7d): -10
 
 ## Signal Details
 
@@ -149,13 +154,13 @@ Detailed explanation of all response fields and their meanings.
 - **Description**: Presence on Spamhaus DROP (Don't Route Or Peer) or EDROP lists
 - **True When**: ASN is confirmed as controlled by spammers or malicious actors
 - **Data Source**: Updated hourly from Spamhaus feeds
-- **Impact**: Major penalty (-50)
+- **Impact**: Major penalty (-30)
 
 #### spam_emission_rate
 - **Type**: Float
 - **Description**: Normalized spam emission score based on external reports
 - **Range**: Typically 0.0 to 1.0, higher is worse
-- **Threshold**: > 0.01 triggers penalty
+- **Threshold**: > 0.1 triggers penalty (-15)
 - **Data Source**: Aggregated spam trap data
 
 #### botnet_c2_count
@@ -251,13 +256,33 @@ The `details` field is no longer a list of strings but a list of **Actionable Ob
     "action": "Review ROA configuration for advertised prefixes."
   },
   {
-      "code": "THREAT_SPAMHAUS",
-      "severity": "CRITICAL",
-      "description": "Listed on Spamhaus DROP/EDROP",
-      "action": "Immediate removal required. Contact Spamhaus."
+    "code": "THREAT_SPAMHAUS",
+    "severity": "CRITICAL",
+    "description": "Listed on Spamhaus DROP/EDROP",
+    "action": "Immediate removal required. Contact Spamhaus."
   }
 ]
 ```
+
+### Complete Penalty Code Reference
+
+Every entry in `details[]` carries a `code` that is stable across API versions and safe to match programmatically.
+
+| Code | Sub-score | Penalty | Trigger Condition |
+|------|-----------|---------|-------------------|
+| `RPKI_INVALID` | Hygiene | -20 | Any prefix with RPKI status INVALID |
+| `RPKI_UNKNOWN` | Hygiene | -10 | > 50% of prefixes lack ROA coverage |
+| `ROUTE_LEAK` | Hygiene | -20 | Valley-free routing violations detected |
+| `BOGON_AD` | Hygiene | -10 | RFC 1918 / reserved space announced |
+| `STUB_TRANSIT` | Hygiene | -15 | Stub ASN appears in transit paths |
+| `META_NO_PDB` | Hygiene | -5 | No PeeringDB profile found |
+| `META_NO_TIER1` | Hygiene | -5 | Zero direct Tier-1 upstream providers |
+| `META_PRIVATE` | Hygiene | -5 | WHOIS contact data hidden/private |
+| `THREAT_SPAMHAUS` | Threat | -30 | Listed on Spamhaus DROP or EDROP |
+| `THREAT_SPAM` | Threat | -15 | Spam emission rate > 0.1 |
+| `THREAT_BOTNET` | Threat | -20/host (max -40) | One or more botnet C2 servers hosted |
+| `THREAT_PHISHING` | Threat | -5/domain | Active phishing domains detected |
+| `THREAT_MALWARE` | Threat | -10/sample | Malware distribution endpoints detected |
 
 ## Null vs Zero Values
 

@@ -35,6 +35,12 @@ export default defineConfig({
             { text: 'Scoring Model', link: '/guide/scoring' },
             { text: 'Signals', link: '/guide/signals' }
           ]
+        },
+        {
+          text: 'Integrations',
+          items: [
+            { text: 'Firewall EDL / Real-Time Stream', link: '/guide/integrations' }
+          ]
         }
       ],
       '/api/': [
@@ -63,7 +69,7 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/your-org/asn-risk-platform' }
+      { icon: 'github', link: 'https://github.com/fabriziosalmi/asn-api' }
     ],
 
     footer: {

@@ -80,6 +80,17 @@ interface MetadataSignals {
 }
 ```
 
+### ForensicsSignals
+
+```typescript
+interface ForensicsSignals {
+  ddos_blackhole_count: number    // Prefixes blackholed by upstreams (>5 triggers penalty)
+  excessive_prepending_count: number  // AS paths with >3x prepend (>10 triggers penalty)
+  whois_entropy: number | null    // Shannon entropy of WHOIS data (low = suspicious)
+  is_zombie_asn: boolean          // True if ASN appears in BGP but has no current registrations
+}
+```
+
 ## HistoryPoint
 
 Individual historical score entry.
@@ -127,11 +138,23 @@ interface UpstreamPeer {
 
 ## Error Response
 
-Standard error format following RFC 7807.
+All error responses follow a consistent structure with a stable `code` for programmatic handling.
 
 ```typescript
 interface ErrorResponse {
-  detail: string
+  error: string        // Human-readable message
+  code: string         // Machine-readable error code (e.g. "ASN_NOT_FOUND")
+  request_id: string   // Correlates to X-Trace-ID response header
+}
+```
+
+### Example
+
+```json
+{
+  "error": "ASN 99999999 not found in database",
+  "code": "ASN_NOT_FOUND",
+  "request_id": "1711700400-a1b2c3d4"
 }
 ```
 
@@ -148,17 +171,74 @@ interface PenaltyDetail {
 }
 ```
 
-### Example
+## CompareResponse
 
-```json
-"details": [
-  {
-      "code": "RPKI_INVALID",
-      "severity": "HIGH",
-      "description": "2.5% of routes have INVALID RPKI status",
-      "action": "Review ROA configuration for advertised prefixes."
+Returned by `GET /v1/tools/compare`.
+
+```typescript
+interface CompareResponse {
+  asn_a: RiskScoreResponse
+  asn_b: RiskScoreResponse
+  comparison: {
+    safer_overall: number | null   // ASN number of the safer network, null if equal
+    score_diff: number             // Absolute score difference (asn_a - asn_b)
+    better_hygiene: number | null  // ASN with better hygiene sub-score
+    better_threat_profile: number | null  // ASN with lower threat sub-score
+    more_stable: number | null     // ASN with better stability sub-score
   }
-]
+}
+```
+
+## DomainRiskResponse
+
+Returned by `GET /v1/tools/domain-risk`.
+
+```typescript
+interface DomainRiskResponse {
+  domain: string
+  resolved_ip: string | null
+  asn: number | null
+  infrastructure_risk: RiskScoreResponse | { asn: number; status: string } | { error: string }
+}
+```
+
+## PeeringDBResponse
+
+Returned by `GET /v1/asn/{asn}/peeringdb`.
+
+```typescript
+interface PeeringDBResponse {
+  asn: number
+  found: boolean
+  peeringdb_data: {
+    name: string
+    type: string          // e.g. "NSP", "Content", "Cable/DSL/ISP", "Enterprise"
+    website: string | null
+    ix_count: number      // Internet Exchange presence count
+    fac_count: number     // Facility count
+    peering_policy: string // "Open", "Selective", "Restrictive", "No"
+  } | null
+}
+```
+
+## WebSocketMessage
+
+Messages streamed over `WS /v1/stream`. Two distinct shapes:
+
+```typescript
+// Score update event
+interface ScoreUpdateMessage {
+  asn: number
+  score: number
+  previous_score: number
+  risk_level: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+  timestamp: string  // ISO 8601
+}
+
+// Keepalive heartbeat (sent every 30 seconds)
+interface PingMessage {
+  type: "ping"
+}
 ```
 
 ## HTTP Status Codes
