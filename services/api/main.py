@@ -5,7 +5,8 @@ import time
 import orjson
 import httpx
 import socket
-import dns.resolver
+import dns.asyncresolver
+import ipaddress
 import hashlib
 from cachetools import TTLCache
 import logging
@@ -22,6 +23,7 @@ from fastapi.responses import ORJSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
+from sqlalchemy.ext.asyncio import create_async_engine
 from clickhouse_driver import Client
 from typing import List, Optional, Dict
 import redis.asyncio as aioredis
@@ -55,8 +57,8 @@ logger = logging.getLogger("asn_api")
 # --- Database Connections ---
 PG_PASS_SAFE = urllib.parse.quote_plus(settings.postgres_password)
 
-pg_engine = create_engine(
-    f"postgresql://{settings.postgres_user}:{PG_PASS_SAFE}@{settings.db_meta_host}/{settings.postgres_db}",
+pg_engine = create_async_engine(
+    f"postgresql+asyncpg://{settings.postgres_user}:{PG_PASS_SAFE}@{settings.db_meta_host}/{settings.postgres_db}",
     pool_size=settings.db_pool_size,
     max_overflow=settings.db_max_overflow,
     pool_pre_ping=True,
@@ -412,7 +414,7 @@ def read_root():
 
 
 @app.get("/health", tags=["System"])
-def health_check():
+async def health_check():
     """Combined Health Check - returns status of all dependencies."""
     health = {
         "status": "healthy",
@@ -422,8 +424,8 @@ def health_check():
     }
 
     try:
-        with pg_engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+        async with pg_engine.begin() as conn:
+            await conn.execute(text("SELECT 1"))
             health["dependencies"]["postgres"] = "up"
         ch_client.execute("SELECT 1")
         health["dependencies"]["clickhouse"] = "up"
@@ -640,25 +642,31 @@ async def get_asn_score(
     except Exception:
         total_count_cached = None
 
-    def _fetch_db_data():
-        with pg_engine.connect() as conn:
-            row = conn.execute(query, {"asn": asn}).mappings().fetchone()
+    async def _fetch_db_data():
+        async with pg_engine.begin() as conn:
+            result = await conn.execute(query, {"asn": asn})
+            row = result.mappings().fetchone()
             if not row:
                 return None
             
             r_dict = dict(row)
             score = r_dict["total_score"]
             
-            t_count = int(total_count_cached) if total_count_cached else conn.execute(text("SELECT count(*) FROM asn_registry")).scalar()
+            if total_count_cached:
+                t_count = int(total_count_cached)
+            else:
+                t_count_res = await conn.execute(text("SELECT count(*) FROM asn_registry"))
+                t_count = t_count_res.scalar()
             
-            c_lower = conn.execute(
+            c_lower_res = await conn.execute(
                 text("SELECT count(*) FROM asn_registry WHERE total_score < :score"),
                 {"score": score},
-            ).scalar()
+            )
+            c_lower = c_lower_res.scalar()
             
             return r_dict, t_count, c_lower
 
-    db_res = await run_in_threadpool(_fetch_db_data)
+    db_res = await _fetch_db_data()
     
     if not db_res:
         raise HTTPException(status_code=404, detail="ASN not found or not yet scored")
@@ -805,7 +813,7 @@ async def add_to_whitelist(
     """Whitelist an ASN to exclude it from risk scoring."""
     trace_id = getattr(request.state, "trace_id", "")
     try:
-        with pg_engine.connect() as conn:
+        async with pg_engine.begin() as conn:
             conn.execute(
                 text("""
                 INSERT INTO asn_whitelist (asn, reason)
@@ -833,7 +841,7 @@ async def add_to_whitelist(
 
 
 @app.get("/v1/tools/compare", tags=["Scoring"])
-def compare_asns(
+async def compare_asns(
     asn_a: int = Query(..., description="First ASN to compare"),
     asn_b: int = Query(..., description="Second ASN to compare"),
     api_key: str = Depends(get_api_key)
@@ -853,8 +861,9 @@ def compare_asns(
         WHERE r.asn IN (:asn_a, :asn_b)
     """)
 
-    with pg_engine.connect() as conn:
-        rows = conn.execute(query, {"asn_a": asn_a, "asn_b": asn_b}).mappings().fetchall()
+    async with pg_engine.begin() as conn:
+        result = await conn.execute(query, {"asn_a": asn_a, "asn_b": asn_b})
+        rows = result.mappings().fetchall()
     
     if len(rows) != 2:
         found_asns = [r["asn"] for r in rows]
@@ -879,7 +888,7 @@ def compare_asns(
 
 
 @app.post("/v1/tools/bulk-risk-check", tags=["Scoring"])
-def bulk_risk_check(
+async def bulk_risk_check(
     req: BulkAnalysisRequest, api_key: str = Depends(get_api_key)
 ):
     """Bulk check multiple ASNs at once. Max 1000 ASNs per request."""
@@ -893,8 +902,9 @@ def bulk_risk_check(
     """)
 
     results = []
-    with pg_engine.connect() as conn:
-        rows = conn.execute(query, {"asns": req.asns}).mappings().fetchall()
+    async with pg_engine.begin() as conn:
+        result = await conn.execute(query, {"asns": req.asns})
+        rows = result.mappings().fetchall()
         row_map = {r["asn"]: r for r in rows}
 
         for asn_id in req.asns:
@@ -924,7 +934,7 @@ def bulk_risk_check(
 @app.get(
     "/v1/asn/{asn}/upstreams", response_model=PeerPressureResponse, tags=["Scoring"]
 )
-def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
+async def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
     """Upstream Risk Assessment - evaluates the risk of upstream providers."""
     _validate_asn(asn)
 
@@ -946,10 +956,11 @@ def get_peer_pressure(asn: int, api_key: str = Depends(get_api_key)):
         return {"asn": asn, "risk_score": 0, "avg_upstream_score": 0, "upstreams": []}
 
     upstreams_data = []
-    with pg_engine.connect() as conn:
-        my_score_res = conn.execute(
+    async with pg_engine.begin() as conn:
+        result = await conn.execute(
             text("SELECT total_score FROM asn_registry WHERE asn = :asn"), {"asn": asn}
-        ).fetchone()
+        )
+        my_score_res = result.fetchone()
         my_score = my_score_res[0] if my_score_res else 0
 
         res = (
@@ -1065,7 +1076,7 @@ def get_peer_pressure_compat(asn: int, api_key: str = Depends(get_api_key)):
     return get_peer_pressure(asn, api_key)
 
 @app.get("/feeds/edl", tags=["Integrations"])
-def get_edl_feed(max_score: float = Query(50.0, ge=0.0, le=100.0)):
+async def get_edl_feed(max_score: float = Query(50.0, ge=0.0, le=100.0)):
     """
     Feed for Firewalls (Palo Alto EDL, Fortinet, etc).
     Returns a plaintext list of ASNs (ASXXXX) below the maximum given risk score.
@@ -1073,15 +1084,16 @@ def get_edl_feed(max_score: float = Query(50.0, ge=0.0, le=100.0)):
     try:
         from fastapi.responses import PlainTextResponse
         
-        def _fetch_edl():
-            with pg_engine.connect() as conn:
-                rows = conn.execute(
+        async def _fetch_edl():
+            async with pg_engine.begin() as conn:
+                result = await conn.execute(
                     text("SELECT asn FROM asn_registry WHERE total_score <= :max_score ORDER BY asn ASC"),
                     {"max_score": max_score}
-                ).fetchall()
+                )
+                rows = result.fetchall()
                 return [f"AS{row[0]}" for row in rows]
                 
-        edl_lines = _fetch_edl()
+        edl_lines = await _fetch_edl()
         return PlainTextResponse("\n".join(edl_lines))
     except Exception as e:
         logger.error(f"edl_generation_error: {e}")
@@ -1160,15 +1172,23 @@ async def get_peeringdb_info(asn: int, api_key: str = Depends(get_api_key)):
         raise HTTPException(status_code=503, detail="Failed to reach PeeringDB")
 
 @app.get("/v1/tools/domain-risk", tags=["Scoring", "Enrichment"])
-def get_domain_risk(domain: str = Query(..., description="Domain to analyze (e.g. example.com)"), api_key: str = Depends(get_api_key)):
+async def get_domain_risk(domain: str = Query(..., description="Domain to analyze (e.g. example.com)"), api_key: str = Depends(get_api_key)):
     """
     Given a domain, this endpoint resolves its IP, finds the hosting ASN, and returns the infrastructure risk score.
     Critical for Phishing/Malware analysis and SOC investigations.
     """
     try:
         # Step 1: Resolve Domain to IP
-        ip_address = socket.gethostbyname(domain)
-    except socket.gaierror:
+        answers = await dns.asyncresolver.resolve(domain, 'A')
+        ip_address = answers[0].to_text()
+        
+        # SSRF Protection
+        ip_obj = ipaddress.ip_address(ip_address)
+        if not ip_obj.is_global:
+            raise HTTPException(status_code=400, detail="Domain resolves to a local or private IP")
+            
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
         raise HTTPException(status_code=400, detail=f"Could not resolve domain: {domain}")
 
     # Step 2: Resolve IP to ASN via Cymru
@@ -1177,7 +1197,7 @@ def get_domain_risk(domain: str = Query(..., description="Domain to analyze (e.g
     
     asn = None
     try:
-        answers = dns.resolver.resolve(query_str, 'TXT')
+        answers = await dns.asyncresolver.resolve(query_str, 'TXT')
         for rdata in answers:
             txt = rdata.to_text().strip('"')
             # Extract ASN, handle multiple ASNs like "13335 13335" by picking the first
@@ -1204,8 +1224,9 @@ def get_domain_risk(domain: str = Query(..., description="Domain to analyze (e.g
         WHERE r.asn = :asn
     """)
 
-    with pg_engine.connect() as conn:
-        row = conn.execute(query_db, {"asn": asn}).mappings().fetchone()
+    async with pg_engine.begin() as conn:
+        result = await conn.execute(query_db, {"asn": asn})
+        row = result.mappings().fetchone()
     
     asn_data = dict(row) if row else {"asn": asn, "status": "Not scored yet"}
 

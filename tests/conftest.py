@@ -48,10 +48,17 @@ def mock_dependencies():
     mock_redis.aclose = AsyncMock()
 
     mock_pg = MagicMock()
-    mock_pg_conn = MagicMock()
-    mock_pg.connect.return_value.__enter__ = MagicMock(return_value=mock_pg_conn)
-    mock_pg.connect.return_value.__exit__ = MagicMock(return_value=False)
-    mock_pg_conn.execute.return_value = MagicMock()
+    mock_pg_conn = AsyncMock()
+    
+    # Context manager setup for async with pg_engine.begin()
+    class AsyncContextManagerMock:
+        async def __aenter__(self):
+            return mock_pg_conn
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+            
+    mock_pg.begin.return_value = AsyncContextManagerMock()
+    mock_pg_conn.execute = AsyncMock(return_value=MagicMock())
 
     mock_ch = MagicMock()
     mock_ch.execute.return_value = MagicMock()
@@ -59,7 +66,7 @@ def mock_dependencies():
     with patch("api.main.redis_client", mock_redis), patch(
         "api.main.pg_engine", mock_pg
     ), patch("api.main.ch_client", mock_ch):
-        yield (mock_redis, mock_pg, mock_ch)
+        yield (mock_redis, mock_pg, mock_ch, mock_pg_conn)
 
 
 @pytest.fixture

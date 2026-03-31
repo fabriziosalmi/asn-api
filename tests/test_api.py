@@ -103,9 +103,9 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
 def test_compare_asns_success(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_conn = mock_pg_conn
     
-    mock_conn = mock_pg.connect.return_value.__enter__.return_value
     mock_conn.execute.return_value.mappings.return_value.fetchall.return_value = [
         {"asn": 123, "name": "Test1", "country_code": "US", "total_score": 90, "risk_level": "LOW", "hygiene_score": 95, "threat_score": 85, "stability_score": 90},
         {"asn": 456, "name": "Test2", "country_code": "UK", "total_score": 50, "risk_level": "HIGH", "hygiene_score": 60, "threat_score": 40, "stability_score": 50}
@@ -118,16 +118,16 @@ def test_compare_asns_success(client, api_key, mock_dependencies):
     assert data["comparison"]["score_diff"] == 40
 
 def test_compare_asns_missing(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch = mock_dependencies
-    mock_conn = mock_pg.connect.return_value.__enter__.return_value
+    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_conn = mock_pg_conn
     mock_conn.execute.return_value.mappings.return_value.fetchall.return_value = []
 
     response = client.get("/v1/tools/compare?asn_a=123&asn_b=456", headers={"X-API-Key": api_key})
     assert response.status_code == 404
 
 def test_get_edl_feed(client, mock_dependencies):
-    mock_redis, mock_pg, mock_ch = mock_dependencies
-    mock_conn = mock_pg.connect.return_value.__enter__.return_value
+    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_conn = mock_pg_conn
     
     mock_conn.execute.return_value.fetchall.return_value = [(123,), (456,)]
 
@@ -138,7 +138,8 @@ def test_get_edl_feed(client, mock_dependencies):
 
 @patch("api.main.httpx.AsyncClient")
 def test_peeringdb_info(mock_client_cls, client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_conn = mock_pg_conn
     mock_redis.get.return_value = None 
     
     # Mock httpx AsyncClient context manager
@@ -157,20 +158,21 @@ def test_peeringdb_info(mock_client_cls, client, api_key, mock_dependencies):
     assert response.json()["found"] is True
     assert response.json()["peeringdb_data"]["type"] == "Content"
 
-@patch("api.main.socket.gethostbyname")
-@patch("api.main.dns.resolver.resolve")
-def test_domain_risk(mock_resolve, mock_socket, client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch = mock_dependencies
+@patch("api.main.dns.asyncresolver.resolve", new_callable=AsyncMock)
+def test_domain_risk(mock_resolve, client, api_key, mock_dependencies):
+    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_conn = mock_pg_conn
     
-    mock_socket.return_value = "1.1.1.1"
+    mock_answer_a = MagicMock()
+    mock_answer_a.to_text.return_value = "8.8.8.8"
     
-    mock_answer = MagicMock()
-    mock_answer.to_text.return_value = "13335 | 1.1.1.0/24 | AU | arinic | 2011-08-11"
-    mock_resolve.return_value = [mock_answer]
+    mock_answer_txt = MagicMock()
+    mock_answer_txt.to_text.return_value = "15169 | 8.8.8.0/24 | US | arin | 2004-01-13"
+    
+    mock_resolve.side_effect = [[mock_answer_a], [mock_answer_txt]]
 
-    mock_conn = mock_pg.connect.return_value.__enter__.return_value
     mock_conn.execute.return_value.mappings.return_value.fetchone.return_value = {
-        "asn": 13335, "name": "Cloudflare", "country_code": "US", 
+        "asn": 15169, "name": "Google", "country_code": "US", 
         "total_score": 100, "risk_level": "LOW",
         "hygiene_score": 100, "threat_score": 100, "stability_score": 100
     }
@@ -178,8 +180,8 @@ def test_domain_risk(mock_resolve, mock_socket, client, api_key, mock_dependenci
     response = client.get("/v1/tools/domain-risk?domain=example.com", headers={"X-API-Key": api_key})
     assert response.status_code == 200
     data = response.json()
-    assert data["resolved_ip"] == "1.1.1.1"
-    assert data["asn"] == 13335
+    assert data["resolved_ip"] == "8.8.8.8"
+    assert data["asn"] == 15169
     assert data["infrastructure_risk"]["total_score"] == 100
 
 def test_websocket_auth_fail(client):
@@ -191,10 +193,10 @@ def test_websocket_auth_fail(client):
 from unittest.mock import MagicMock 
 
 def test_get_asn_score_success(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_conn = mock_pg_conn
     mock_redis.get.return_value = None  # Bypass cache
     
-    mock_conn = mock_pg.connect.return_value.__enter__.return_value
     
     # Mocking total count (t_count) and lower bound (c_lower) which uses scalar
     mock_conn.execute.return_value.scalar.side_effect = [1000, 500]  # Total ASNs, Lower ASNs
@@ -219,7 +221,8 @@ def test_get_asn_score_success(client, api_key, mock_dependencies):
     assert data["risk_score"] == 95
 
 def test_get_asn_history_success(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_conn = mock_pg_conn
     
     # Mock clickhouse response: 1st call is count, 2nd is data
     mock_ch.execute.side_effect = [
@@ -234,7 +237,8 @@ def test_get_asn_history_success(client, api_key, mock_dependencies):
     assert len(data["data"]) == 2
 
 def test_add_to_whitelist(client, api_key, mock_dependencies):
-    mock_redis, mock_pg, mock_ch = mock_dependencies
+    mock_redis, mock_pg, mock_ch, mock_pg_conn = mock_dependencies
+    mock_conn = mock_pg_conn
     
     response = client.post("/v1/whitelist", json={"asn": 12345, "reason": "Trusted ISP"}, headers={"X-API-Key": api_key})
     assert response.status_code == 200
