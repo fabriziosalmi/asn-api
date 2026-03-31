@@ -814,7 +814,7 @@ async def add_to_whitelist(
     trace_id = getattr(request.state, "trace_id", "")
     try:
         async with pg_engine.begin() as conn:
-            conn.execute(
+            await conn.execute(
                 text("""
                 INSERT INTO asn_whitelist (asn, reason)
                 VALUES (:asn, :reason)
@@ -822,7 +822,7 @@ async def add_to_whitelist(
             """),
                 {"asn": req.asn, "reason": req.reason},
             )
-            conn.commit()
+            # pg_engine.begin() auto-commits on context exit — explicit commit removed
 
         # Invalidate cache for this ASN
         await redis_client.delete(f"score:v3:{req.asn}")
@@ -1102,25 +1102,69 @@ async def get_edl_feed(max_score: float = Query(50.0, ge=0.0, le=100.0)):
 @app.websocket("/v1/stream")
 async def websocket_firehose(websocket: WebSocket, api_key: str = Query(...)):
     """
-    Real-time firehose of ASN score updates using Server-Sent Events or WebSockets.
+    Real-time firehose of ASN score updates over WebSocket.
+
+    Architecture: bounded asyncio.Queue + producer/consumer task split.
+    - QUEUE_MAX: max messages buffered per connection; excess drops the client (OOM guard).
+    - SEND_TIMEOUT: force-disconnect stalled clients that can't drain their TCP buffer in time.
+    - HEARTBEAT_INTERVAL: periodic ping to reap zombie connections (silent disconnects).
     """
     await websocket.accept()
-    # Simple auth check for websocket
     if not api_key:
         await websocket.close(code=1008)
         return
 
-    # Subscribe to Redis
+    QUEUE_MAX = 100
+    SEND_TIMEOUT = 5.0
+    HEARTBEAT_INTERVAL = 30.0
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_MAX)
     pubsub = redis_client.pubsub()
     await pubsub.subscribe("events:asn_updates")
-    
+
+    async def _producer() -> None:
+        """Read from Redis pubsub and push into the bounded queue."""
+        try:
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    if queue.full():
+                        # Client cannot keep up — poison the queue so consumer exits.
+                        await queue.put(None)
+                        return
+                    await queue.put(message["data"])
+        except Exception:
+            await queue.put(None)
+
+    async def _consumer() -> None:
+        """Drain the queue to the WebSocket with per-send timeout and heartbeat."""
+        loop = asyncio.get_event_loop()
+        last_ping = loop.time()
+        while True:
+            now = loop.time()
+            if now - last_ping >= HEARTBEAT_INTERVAL:
+                await asyncio.wait_for(
+                    websocket.send_json({"type": "ping"}), timeout=SEND_TIMEOUT
+                )
+                last_ping = now
+            try:
+                data = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL)
+            except asyncio.TimeoutError:
+                continue  # nothing in queue; loop back to send heartbeat
+            if data is None:
+                # Poison pill from producer (overflow or error) — close cleanly.
+                await websocket.close(code=1008)
+                return
+            await asyncio.wait_for(
+                websocket.send_text(data), timeout=SEND_TIMEOUT
+            )
+
+    producer_task = asyncio.create_task(_producer())
     try:
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                await websocket.send_text(message["data"])
-    except WebSocketDisconnect:
-        logger.info("Client disconnected from firehose.")
+        await _consumer()
+    except (WebSocketDisconnect, asyncio.TimeoutError):
+        logger.info("ws_firehose_disconnect")
     finally:
+        producer_task.cancel()
         await pubsub.unsubscribe("events:asn_updates")
 
 
