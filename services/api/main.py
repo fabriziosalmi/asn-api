@@ -115,7 +115,7 @@ end
 # --- Constants ---
 ASN_MIN = 1
 ASN_MAX = 4294967295
-API_VERSION = "7.4.0"
+API_VERSION = "7.4.1"
 STATS_TOTAL_COUNT_CACHE_TTL = 300   # 5 minutes
 PEERINGDB_CACHE_TTL = 86400          # 24 hours
 
@@ -383,7 +383,19 @@ async def request_middleware(request: Request, call_next):
             )
     except Exception as e:
         logger.error("rate_limit_error", extra={"trace_id": trace_id, "error": str(e)})
-        remaining = settings.api_rate_limit - 1
+        return ORJSONResponse(
+            status_code=503,
+            content=ErrorEnvelope(
+                error="Rate limiting service unavailable",
+                code="RATE_LIMIT_ERROR",
+                request_id=trace_id,
+            ).model_dump(),
+            headers={
+                "X-RateLimit-Limit": str(settings.api_rate_limit),
+                "X-RateLimit-Remaining": "0",
+                "Retry-After": "5",
+            },
+        )
 
     response = await call_next(request)
     process_time = (time.time() - start_time) * 1000

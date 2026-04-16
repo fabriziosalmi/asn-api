@@ -6,9 +6,6 @@ stages:
 
 variables:
   DOCKER_DRIVER: overlay2
-  POSTGRES_DB: asn_db
-  POSTGRES_USER: runner
-  POSTGRES_PASSWORD: runner_password
 
 services:
   - postgres:15-alpine
@@ -26,8 +23,13 @@ unit_tests:
   stage: test
   image: python:3.11
   variables:
+    POSTGRES_DB: $POSTGRES_DB
+    POSTGRES_USER: $POSTGRES_USER
+    POSTGRES_PASSWORD: $POSTGRES_PASSWORD
     DB_META_HOST: postgres
     REDIS_HOST: redis
+    API_SECRET_KEY: $API_SECRET_KEY
+    LOG_FORMAT: text
   before_script:
     - pip install -r services/api/requirements.txt
     - pip install pytest pytest-asyncio httpx

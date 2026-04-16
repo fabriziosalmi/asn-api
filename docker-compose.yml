@@ -159,7 +159,7 @@ services:
       - API_SECRET_KEY=${API_SECRET_KEY}
       - CACHE_TTL=${CACHE_TTL:-60}
       - API_RATE_LIMIT=${API_RATE_LIMIT:-100}
-      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - CORS_ORIGINS=${CORS_ORIGINS}
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     networks:

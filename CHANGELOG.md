@@ -2,6 +2,17 @@
 
 All notable changes to the ASN Risk Intelligence Platform.
 
+## [7.4.1] - Security Hardening (Apr 2026)
+### Fixed
+- **CORS Wildcard**: Removed `*` default, now requires explicit `CORS_ORIGINS` configuration.
+- **API Key Validation**: Added `min_length=32` requirement for API secret keys.
+- **Rate Limit Bypass**: Fixed fallback that disabled rate limiting when Redis was unavailable (now returns 503).
+- **GitLab CI Credentials**: Removed hardcoded `POSTGRES_PASSWORD` from CI variables.
+
+### Changed
+- **Nginx Health Check**: Now proxies to upstream API instead of returning static OK.
+- **ASN Validation**: Added range validation in scorer engine (1-4,294,967,295).
+
 ## [7.2.0] - P3 Hardening (Mar 2026)
 ### Added
 - **Load Testing**: Locust load test suite with two user profiles and performance targets.

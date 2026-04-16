@@ -22,14 +22,21 @@ class Settings(BaseSettings):
     redis_host: str = Field(default="broker-cache", description="Redis host")
 
     # API
-    api_secret_key: str = Field(..., description="API authentication key")
+    api_secret_key: str = Field(
+        ...,
+        min_length=32,
+        description="API authentication key (minimum 32 characters)",
+    )
     cache_ttl: int = Field(
         default=60, ge=0, le=3600, description="Cache TTL in seconds"
     )
     api_rate_limit: int = Field(
         default=100, ge=1, le=10000, description="Requests per minute per IP"
     )
-    cors_origins: str = Field(default="*", description="Comma-separated CORS origins")
+    cors_origins: str = Field(
+        default="http://localhost:3000",
+        description="Comma-separated CORS origins",
+    )
 
     # Logging
     log_level: str = Field(default="INFO", description="Log level")

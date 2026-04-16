@@ -34,6 +34,9 @@ logger = logging.getLogger("engine.scorer")
 # --- DB Config ---
 PG_PASS_SAFE = urllib.parse.quote_plus(settings.postgres_password)
 
+ASN_MIN = 1
+ASN_MAX = 4294967295
+
 
 class RiskScorer:
     def __init__(self) -> None:
@@ -57,6 +60,10 @@ class RiskScorer:
 
     def calculate_score(self, asn: int, trace_id: str = "") -> int:
         """Orchestrates the scoring process for a single ASN."""
+        if not ASN_MIN <= asn <= ASN_MAX:
+            logger.warning("invalid_asn", extra={"asn": asn, "trace_id": trace_id})
+            raise ValueError(f"ASN must be between {ASN_MIN} and {ASN_MAX}, got {asn}")
+
         extra = {"asn": asn, "trace_id": trace_id}
         logger.info("scoring_start", extra=extra)
 
