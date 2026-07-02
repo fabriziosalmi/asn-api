@@ -1,6 +1,7 @@
 # Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
 
 import time
+import ipaddress
 import urllib.parse
 import logging
 import threading
@@ -74,7 +75,13 @@ class RiskScorer:
             )
             return 100
 
-        signals = self._get_or_create_signals(asn)
+        signals = dict(self._get_or_create_signals(asn))
+        derived = self._derive_signals_from_events(asn)  # threat intel
+        derived.update(self._derive_bgp_signals(asn))  # bogon + stub-transit
+        derived.update(self._derive_rpki(asn))  # RPKI validity (cached)
+        if derived:
+            signals.update(derived)
+            self._persist_derived_signals(asn, derived)
         temporal_metrics = self._calculate_temporal_metrics(asn)
         final_score, breakdown, details, risk_level = self._apply_scoring_rules(
             signals, temporal_metrics
@@ -145,6 +152,239 @@ class RiskScorer:
                     "is_whois_private": False,
                 }
             return result
+
+    # How far back detections feed the discrete threat signals.
+    THREAT_SIGNAL_WINDOW_DAYS = 30
+    # BGP-derived signals
+    PREFIX_LOOKBACK_DAYS = 7
+    PREFIX_SCAN_LIMIT = 200
+    STUB_MAX_ORIGINATED_PREFIXES = 5
+    # RPKI validation (external, cached)
+    RPKI_CACHE_TTL = 21600  # 6h
+    RPKI_MAX_PREFIXES = 8
+
+    # Columns this class is allowed to materialize into asn_signals. Used both to
+    # build the partial UPDATE and to keep it injection-safe (keys are code-owned).
+    _DERIVED_COLUMNS = (
+        "spamhaus_listed",
+        "malware_distribution_count",
+        "has_route_leaks",
+        "has_bogon_ads",
+        "is_stub_but_transit",
+        "rpki_invalid_percent",
+        "rpki_unknown_percent",
+    )
+
+    def _derive_signals_from_events(self, asn: int) -> dict:
+        """Materialize discrete threat signals in Postgres from the detection
+        stream in ClickHouse (threat_events). Without this, asn_signals stays at
+        insert-time defaults and the entire Category-B / route-leak scoring is
+        dead — the whole point of the ingestor never reaches the score.
+
+        Threat signals derived here: spamhaus_listed, malware_distribution_count,
+        has_route_leaks. Routing-hygiene signals (bogon, stub-transit, RPKI) are
+        derived separately in _derive_bgp_signals / _derive_rpki. spam-rate and
+        whois-entropy still have no feed and are intentionally left untouched."""
+        try:
+            rows = self.ch_client.execute(
+                """SELECT category, uniqExact(target_ip) AS ips, count() AS n
+                   FROM threat_events
+                   WHERE asn = %(asn)s AND timestamp > now() - INTERVAL %(days)s DAY
+                   GROUP BY category""",
+                {"asn": asn, "days": self.THREAT_SIGNAL_WINDOW_DAYS},
+            )
+        except Exception as e:
+            logger.warning(
+                "signal_derivation_failed", extra={"asn": asn, "error": str(e)}
+            )
+            return {}
+
+        by_cat = {row[0]: {"ips": row[1], "n": row[2]} for row in rows}
+        return {
+            "spamhaus_listed": by_cat.get("spamhaus", {}).get("n", 0) > 0,
+            "malware_distribution_count": int(by_cat.get("malware", {}).get("ips", 0)),
+            "has_route_leaks": by_cat.get("route_leak", {}).get("n", 0) > 0,
+        }
+
+    def _get_originated_prefixes(self, asn: int, limit: int) -> list:
+        """Distinct prefixes this ASN originated (was last hop for) recently."""
+        try:
+            rows = self.ch_client.execute(
+                """SELECT prefix, count() AS n FROM bgp_events
+                   WHERE asn = %(asn)s AND event_type = 'announce'
+                   AND timestamp > now() - INTERVAL %(days)s DAY
+                   GROUP BY prefix ORDER BY n DESC LIMIT %(lim)s""",
+                {"asn": asn, "days": self.PREFIX_LOOKBACK_DAYS, "lim": limit},
+            )
+            return [r[0] for r in rows]
+        except Exception as e:
+            logger.warning("prefix_fetch_failed", extra={"asn": asn, "error": str(e)})
+            return []
+
+    @staticmethod
+    def _is_bogon(prefix: str) -> bool:
+        """True if the prefix should never appear in the global routing table
+        (private/reserved/loopback/link-local/multicast/unspecified)."""
+        try:
+            net = ipaddress.ip_network(prefix, strict=False)
+        except ValueError:
+            return False
+        return (
+            net.is_private
+            or net.is_reserved
+            or net.is_loopback
+            or net.is_link_local
+            or net.is_multicast
+            or net.is_unspecified
+        )
+
+    @classmethod
+    def _classify_stub_transit(
+        cls, transit_hops: int, originated_prefixes: int
+    ) -> bool:
+        """A small operator (originates few prefixes) that is nonetheless used as
+        a mid-path transit hop for others — a classic misconfiguration / leak
+        risk. Pure transit providers (0 originated) are excluded."""
+        return (
+            transit_hops > 0
+            and 0 < originated_prefixes <= cls.STUB_MAX_ORIGINATED_PREFIXES
+        )
+
+    def _derive_bgp_signals(self, asn: int) -> dict:
+        """Derive has_bogon_ads and is_stub_but_transit purely from the local
+        BGP view in ClickHouse — no external dependency."""
+        prefixes = self._get_originated_prefixes(asn, self.PREFIX_SCAN_LIMIT)
+        if not prefixes:
+            return {}
+
+        has_bogon = any(self._is_bogon(p) for p in prefixes)
+
+        # transit_hops: events where this ASN is in the path but NOT the origin.
+        transit_hops = self._ch_scalar(
+            """SELECT count() FROM bgp_events
+               WHERE has(path, %(asn)s) AND length(path) > 0
+               AND path[length(path)] != %(asn)s
+               AND timestamp > now() - INTERVAL 30 DAY""",
+            {"asn": asn},
+        )
+        originated_30d = self._ch_scalar(
+            """SELECT uniqExact(prefix) FROM bgp_events
+               WHERE asn = %(asn)s AND event_type = 'announce'
+               AND timestamp > now() - INTERVAL 30 DAY""",
+            {"asn": asn},
+        )
+        return {
+            "has_bogon_ads": has_bogon,
+            "is_stub_but_transit": self._classify_stub_transit(
+                transit_hops, originated_30d
+            ),
+        }
+
+    @staticmethod
+    def _rpki_percentages(statuses: list):
+        """Turn a list of per-prefix RPKI statuses into (invalid%, unknown%).
+        RIPE Stat reports invalids as 'invalid_asn' / 'invalid_length' (not a
+        bare 'invalid'), so any status starting with 'invalid' counts as invalid;
+        'valid' counts as valid; everything else (incl. 'unknown', '') is unknown.
+        Returns None when there is nothing to score."""
+        total = len(statuses)
+        if not total:
+            return None
+        invalid = sum(1 for s in statuses if s.startswith("invalid"))
+        valid = sum(1 for s in statuses if s == "valid")
+        unknown = total - invalid - valid
+        return round(invalid / total * 100, 2), round(unknown / total * 100, 2)
+
+    def _derive_rpki(self, asn: int) -> dict:
+        """Validate the ASN's prefixes against RPKI via RIPE Stat and compute
+        invalid/unknown percentages. Cached in Redis (6h) and gated by the same
+        circuit breaker as enrichment so a RIPE outage can't stall scoring."""
+        cache_key = f"rpki:v1:{asn}"
+        try:
+            cached = self.redis_client.get(cache_key)
+            if cached:
+                inv, unk = cached.split(",")
+                return {
+                    "rpki_invalid_percent": float(inv),
+                    "rpki_unknown_percent": float(unk),
+                }
+        except Exception:
+            pass
+
+        with self._cb_lock:
+            if self._cb_state["open"]:
+                if (
+                    time.time() - self._cb_state["last_failure"]
+                    <= settings.circuit_breaker_cooldown
+                ):
+                    return {}
+                self._cb_state["open"] = False
+                self._cb_state["failures"] = 0
+
+        prefixes = self._get_originated_prefixes(asn, self.RPKI_MAX_PREFIXES)
+        if not prefixes:
+            return {}
+
+        statuses = []
+        for prefix in prefixes:
+            try:
+                resp = http_requests.get(
+                    "https://stat.ripe.net/data/rpki-validation/data.json",
+                    params={"resource": asn, "prefix": prefix},
+                    timeout=settings.enrichment_timeout,
+                )
+                if resp.status_code != 200:
+                    continue
+                status = (resp.json().get("data") or {}).get("status", "").lower()
+                statuses.append(status)
+                with self._cb_lock:
+                    self._cb_state["failures"] = 0
+            except Exception as e:
+                logger.warning(
+                    "rpki_check_failed",
+                    extra={"asn": asn, "prefix": prefix, "error": str(e)},
+                )
+                with self._cb_lock:
+                    self._cb_state["failures"] += 1
+                    self._cb_state["last_failure"] = time.time()
+                    if self._cb_state["failures"] >= settings.circuit_breaker_threshold:
+                        self._cb_state["open"] = True
+                        logger.error(
+                            "circuit_breaker_open", extra={"reason": "rpki_failures"}
+                        )
+                break
+
+        pct = self._rpki_percentages(statuses)
+        if pct is None:
+            return {}
+        inv_pct, unk_pct = pct
+        try:
+            self.redis_client.setex(
+                cache_key, self.RPKI_CACHE_TTL, f"{inv_pct},{unk_pct}"
+            )
+        except Exception:
+            pass
+        return {"rpki_invalid_percent": inv_pct, "rpki_unknown_percent": unk_pct}
+
+    def _persist_derived_signals(self, asn: int, derived: dict) -> None:
+        """Write the derived signals back to asn_signals so both the score and
+        the API's penalty breakdown reflect them. Handles partial dicts (e.g.
+        RPKI absent when RIPE is unreachable) via a code-owned column whitelist."""
+        updates = {k: v for k, v in derived.items() if k in self._DERIVED_COLUMNS}
+        if not updates:
+            return
+        set_clause = ", ".join(f"{col} = :{col}" for col in updates)
+        params = dict(updates)
+        params["asn"] = asn
+        try:
+            with self.pg_engine.connect() as conn:
+                conn.execute(
+                    text(f"UPDATE asn_signals SET {set_clause} WHERE asn = :asn"),
+                    params,
+                )
+                conn.commit()
+        except Exception as e:
+            logger.warning("signal_persist_failed", extra={"asn": asn, "error": str(e)})
 
     def _check_whitelist(self, asn: int) -> bool:
         try:
@@ -455,7 +695,8 @@ class RiskScorer:
             logger.error("history_log_failed", extra={"asn": asn, "error": str(e)})
 
         logger.info(
-            "scoring_complete", extra={"asn": asn, "score": score, "level": risk_level}
+            "scoring_complete",
+            extra={"asn": asn, "score": score, "risk_level": risk_level},
         )
 
     def _enrich_asn_metadata(self, asn: int, conn) -> None:
@@ -518,5 +759,18 @@ class RiskScorer:
                             "circuit_breaker_open",
                             extra={"reason": "external_api_failures"},
                         )
+
+        # Skip external enrichment when we already know this ASN's holder name.
+        # Previously RIPE + PeeringDB were hit on EVERY re-score (up to 50 ASNs
+        # every 10s from the scanner) — a self-inflicted DoS on external APIs.
+        # A NULL/'Unknown' name means still-unenriched, so we let it through.
+        try:
+            existing_name = conn.execute(
+                text("SELECT name FROM asn_registry WHERE asn = :asn"), {"asn": asn}
+            ).scalar()
+            if existing_name and existing_name != "Unknown":
+                return
+        except Exception:
+            pass
 
         self.executor.submit(run_enrichment)

@@ -2,6 +2,44 @@
 
 All notable changes to the ASN Risk Intelligence Platform.
 
+## [7.5.0] - Scoring Activation & Reliability (Jul 2026)
+### Added
+- **Live routing-hygiene signals**: the scoring engine now derives `has_bogon_ads`,
+  `is_stub_but_transit` and RPKI validity (`rpki_invalid_percent`/`rpki_unknown_percent`)
+  from the local BGP view and RIPE Stat (cached 6h, circuit-breaker gated). Previously
+  these signals were never populated and their penalties never fired.
+- **Threat-signal materialization**: ingestor detections in ClickHouse (`threat_events`)
+  are now aggregated into `asn_signals` (spamhaus/malware/route-leak), so Category-B
+  scoring reflects real detections instead of insert-time defaults.
+- **Scorer test suite**: expanded from 2 to 53 unit tests (every penalty, cap, bonus,
+  clamping, risk-level threshold, and the bogon/stub/RPKI helpers).
+
+### Changed
+- **Rate limiting is now per real client IP** (reads `X-Real-IP`/`X-Forwarded-For` set by
+  nginx + uvicorn `--proxy-headers`) instead of collapsing all traffic into the nginx
+  container's IP (a single global bucket).
+- **Rate limiter fails OPEN** on a Redis outage (serves the request, logs loudly) and
+  **`/health`, `/`, `/metrics` are exempt** — a Redis blip no longer 503s every request
+  or kills liveness probes. (Reverses the 7.4.1 "returns 503" behavior, which was worse.)
+- **`/feeds/edl` now requires `X-API-Key`** — previously it exposed the full scored-ASN
+  inventory to anonymous callers. ⚠️ EDL consumers must now send the key (Palo Alto /
+  Fortinet EDL sources support a custom header).
+- **WebSocket auth** accepts the `X-API-Key` handshake header (query param kept as
+  fallback); nginx access log no longer records the query string, keeping the key out of logs.
+- **`/metrics`** is blocked at the edge (nginx returns 403 for `/api/metrics`).
+- Enrichment (RIPE/PeeringDB) no longer runs on every re-score of an already-known ASN.
+
+### Fixed
+- **ClickHouse thread-safety**: the API used a single non-thread-safe `clickhouse-driver`
+  client across a 20-thread pool → protocol corruption under concurrency. Now one client
+  per pool thread (`threading.local`).
+- **nginx would not start** on open-source nginx: removed the NGINX-Plus-only
+  `health_check_timeout` directive that failed `nginx -t`.
+- **Broken CI**: the 7.4.1 `min_length=32` secret constraint broke the whole test suite
+  (conftest/CI used a 15-char key); also fixed an unused import (ruff) and applied `black`.
+  Test suite is green again (119 tests) and lint-clean.
+- **WebSocket pubsub leak**: the per-connection Redis pubsub is now closed on disconnect.
+
 ## [7.4.1] - Security Hardening (Apr 2026)
 ### Fixed
 - **CORS Wildcard**: Removed `*` default, now requires explicit `CORS_ORIGINS` configuration.
