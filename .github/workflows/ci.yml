@@ -98,7 +98,16 @@ jobs:
     - name: Audit dependencies
       run: |
         pip install pip-audit
-        pip-audit -r services/api/requirements.txt
+        # starlette 0.52.1 is pulled transitively by fastapi (<1.0, which caps
+        # starlette <0.53). The advisories below are only fixed in starlette
+        # >=1.0 — a line NO released FastAPI supports yet, so there is currently
+        # no installable fix. They are suppressed with justification and MUST be
+        # re-evaluated on every FastAPI bump (drop these flags once FastAPI
+        # supports starlette 1.x). Exposure here is low: the app uses its own
+        # API-key auth (not starlette AuthenticationMiddleware) and no multipart
+        # / UploadFile endpoints.
+        STARLETTE_UNFIXABLE="--ignore-vuln PYSEC-2026-161 --ignore-vuln PYSEC-2026-248 --ignore-vuln PYSEC-2026-249 --ignore-vuln CVE-2026-48817 --ignore-vuln CVE-2026-48818"
+        pip-audit -r services/api/requirements.txt $STARLETTE_UNFIXABLE
         pip-audit -r services/engine/requirements.txt
         pip-audit -r services/ingestor/requirements.txt
 
