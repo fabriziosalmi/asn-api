@@ -1,10 +1,12 @@
 # Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
 
 import time
+import math
 import ipaddress
 import urllib.parse
 import logging
 import threading
+from collections import Counter
 from datetime import datetime
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
@@ -171,6 +173,9 @@ class RiskScorer:
         "has_route_leaks",
         "has_bogon_ads",
         "is_stub_but_transit",
+        "prefix_granularity_score",
+        "spam_emission_rate",
+        "whois_entropy",
         "rpki_invalid_percent",
         "rpki_unknown_percent",
     )
@@ -250,14 +255,74 @@ class RiskScorer:
             and 0 < originated_prefixes <= cls.STUB_MAX_ORIGINATED_PREFIXES
         )
 
+    @staticmethod
+    def _shannon_entropy(name: str) -> float:
+        """Shannon entropy (bits/char) of a string. Random/generated org names
+        score high (~4.5+); ordinary names lower."""
+        if not name:
+            return 0.0
+        counts = Counter(name)
+        n = len(name)
+        return round(-sum((c / n) * math.log2(c / n) for c in counts.values()), 2)
+
+    @staticmethod
+    def _prefix_granularity(prefixes: list) -> int:
+        """Percentage (0-100) of the ASN's own prefixes that are more-specifics
+        of another prefix it also announces — i.e. self de-aggregation. 0 when
+        there is nothing to score. Penalised above 50."""
+        nets = []
+        for p in prefixes:
+            try:
+                nets.append(ipaddress.ip_network(p, strict=False))
+            except ValueError:
+                continue
+        if not nets:
+            return 0
+        covered = 0
+        for a in nets:
+            for b in nets:
+                if (
+                    a != b
+                    and a.version == b.version
+                    and a.prefixlen > b.prefixlen
+                    and a.subnet_of(b)
+                ):
+                    covered += 1
+                    break
+        return round(100 * covered / len(nets))
+
+    def _whois_entropy(self, asn: int):
+        """Entropy of the ASN's holder name (populated by enrichment). Returns
+        None when the name is not yet known, so the signal is left untouched."""
+        try:
+            with self.pg_engine.connect() as conn:
+                name = conn.execute(
+                    text("SELECT name FROM asn_registry WHERE asn = :asn"),
+                    {"asn": asn},
+                ).scalar()
+        except Exception as e:
+            logger.warning("whois_entropy_failed", extra={"asn": asn, "error": str(e)})
+            return None
+        if not name or name == "Unknown":
+            return None
+        return self._shannon_entropy(name)
+
     def _derive_bgp_signals(self, asn: int) -> dict:
-        """Derive has_bogon_ads and is_stub_but_transit purely from the local
-        BGP view in ClickHouse — no external dependency."""
+        """Derive routing-hygiene / identity signals from the local BGP view in
+        ClickHouse plus the enriched holder name — no fabricated data:
+        has_bogon_ads, is_stub_but_transit, prefix_granularity_score,
+        spam_emission_rate (fraction of prefixes on Spamhaus), whois_entropy."""
+        derived = {}
+        entropy = self._whois_entropy(asn)
+        if entropy is not None:
+            derived["whois_entropy"] = entropy
+
         prefixes = self._get_originated_prefixes(asn, self.PREFIX_SCAN_LIMIT)
         if not prefixes:
-            return {}
+            return derived
 
-        has_bogon = any(self._is_bogon(p) for p in prefixes)
+        derived["has_bogon_ads"] = any(self._is_bogon(p) for p in prefixes)
+        derived["prefix_granularity_score"] = self._prefix_granularity(prefixes)
 
         # transit_hops: events where this ASN is in the path but NOT the origin.
         transit_hops = self._ch_scalar(
@@ -273,12 +338,23 @@ class RiskScorer:
                AND timestamp > now() - INTERVAL 30 DAY""",
             {"asn": asn},
         )
-        return {
-            "has_bogon_ads": has_bogon,
-            "is_stub_but_transit": self._classify_stub_transit(
-                transit_hops, originated_30d
-            ),
-        }
+        derived["is_stub_but_transit"] = self._classify_stub_transit(
+            transit_hops, originated_30d
+        )
+
+        # spam_emission_rate: fraction of the ASN's prefixes flagged by Spamhaus.
+        spam_flagged = self._ch_scalar(
+            """SELECT uniqExact(target_ip) FROM threat_events
+               WHERE asn = %(asn)s AND category = 'spamhaus'
+               AND timestamp > now() - INTERVAL 30 DAY""",
+            {"asn": asn},
+        )
+        total_prefixes = originated_30d or len(prefixes)
+        if total_prefixes > 0:
+            derived["spam_emission_rate"] = round(
+                min(1.0, spam_flagged / total_prefixes), 5
+            )
+        return derived
 
     @staticmethod
     def _rpki_percentages(statuses: list):
