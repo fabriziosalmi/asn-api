@@ -304,6 +304,41 @@ def test_classify_stub_transit(transit_hops, originated, expected):
     assert RiskScorer._classify_stub_transit(transit_hops, originated) is expected
 
 
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("", 0.0),
+        ("aaaa", 0.0),  # single distinct char → zero entropy
+        ("ab", 1.0),  # two equally-likely chars → 1 bit
+        ("abcd", 2.0),  # four equally-likely chars → 2 bits
+    ],
+)
+def test_shannon_entropy(name, expected):
+    assert RiskScorer._shannon_entropy(name) == expected
+
+
+def test_shannon_entropy_generated_vs_real():
+    # A random-looking string should out-score an ordinary org name.
+    assert RiskScorer._shannon_entropy("x7Qp2Zk9Lm4Rb") > RiskScorer._shannon_entropy(
+        "Google LLC"
+    )
+
+
+@pytest.mark.parametrize(
+    "prefixes,expected",
+    [
+        ([], 0),
+        (["1.0.0.0/8"], 0),  # single prefix, nothing more-specific
+        (["10.0.0.0/24", "10.0.1.0/24"], 0),  # siblings, not nested
+        (["1.0.0.0/8", "1.1.0.0/16"], 50),  # /16 is a more-specific of /8 → 1 of 2
+        (["1.0.0.0/8", "1.1.0.0/16", "2.0.0.0/8"], 33),  # 1 of 3
+        (["1.0.0.0/8", "bad", "1.1.0.0/16"], 50),  # malformed ignored → 1 of 2
+    ],
+)
+def test_prefix_granularity(prefixes, expected):
+    assert RiskScorer._prefix_granularity(prefixes) == expected
+
+
 def test_rpki_percentages():
     assert RiskScorer._rpki_percentages([]) is None
     assert RiskScorer._rpki_percentages(["valid", "valid"]) == (0.0, 0.0)

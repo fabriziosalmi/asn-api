@@ -2,6 +2,23 @@
 
 All notable changes to the ASN Risk Intelligence Platform.
 
+## [7.5.1] - Complete the Signals & Dynamic Upstreams (Jul 2026)
+### Added
+- **Three remaining signals now populated** from real data (no fabrication):
+  - `whois_entropy` — Shannon entropy of the enriched holder name (generated
+    names score high; penalised above 4.5).
+  - `prefix_granularity_score` — percentage of the ASN's prefixes that are
+    more-specifics of another prefix it also announces (self de-aggregation).
+  - `spam_emission_rate` — fraction of the ASN's prefixes flagged by Spamhaus.
+  With this, every scoring rule that reads `asn_signals` is now fed by live data.
+- Scorer unit tests for `_shannon_entropy` and `_prefix_granularity`.
+
+### Changed
+- **nginx uses a dynamic resolver** (Docker embedded DNS `127.0.0.11`) with
+  variable-based `proxy_pass` instead of static `upstream` blocks. A backend
+  container recreated with a new IP is now picked up automatically — no proxy
+  restart needed, eliminating the stale-upstream 502 after a redeploy.
+
 ## [7.5.0] - Scoring Activation & Reliability (Jul 2026)
 ### Added
 - **Live routing-hygiene signals**: the scoring engine now derives `has_bogon_ads`,
