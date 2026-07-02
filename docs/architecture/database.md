@@ -19,7 +19,7 @@ CREATE TABLE asn_registry (
     threat_score         INTEGER DEFAULT 100,
     stability_score      INTEGER DEFAULT 100,
     downstream_score     INTEGER DEFAULT 100,
-    whois_entropy_score  INTEGER DEFAULT 100,
+    whois_entropy_score  DECIMAL(5,2) DEFAULT 0.0,
     risk_level           VARCHAR(20) DEFAULT 'UNKNOWN',
     created_at           TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     last_scored_at       TIMESTAMP WITH TIME ZONE
@@ -50,7 +50,7 @@ CREATE TABLE asn_signals (
     upstream_tier1_count       INTEGER DEFAULT 0,
     is_whois_private           BOOLEAN DEFAULT FALSE,
     is_zombie_asn              BOOLEAN DEFAULT FALSE,
-    whois_entropy              NUMERIC(10,5),
+    whois_entropy              DECIMAL(5,2) DEFAULT 0.0,
     ddos_blackhole_count       INTEGER DEFAULT 0,
     excessive_prepending_count INTEGER DEFAULT 0,
     updated_at                 TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -75,44 +75,61 @@ ClickHouse stores time-series event data.
 
 ### bgp_events
 
-Raw BGP update events.
+Raw BGP update events. 90-day TTL.
 
 ```sql
 CREATE TABLE bgp_events (
-    timestamp    DateTime,
-    asn          UInt32,
-    prefix       String,
-    event_type   Enum8('A' = 1, 'W' = 2),
-    as_path      Array(UInt32),
-    origin_as    UInt32,
-    upstream_as  UInt32
+    timestamp   DateTime,
+    asn         UInt32,
+    prefix      String,
+    event_type  Enum8('announce' = 1, 'withdraw' = 2),
+    upstream_as UInt32,
+    path        Array(UInt32),
+    community   Array(UInt32)
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
-ORDER BY (asn, timestamp)
-TTL timestamp + INTERVAL 90 DAY;
+ORDER BY (timestamp, asn)
+TTL timestamp + INTERVAL 90 DAY DELETE;
 ```
 
 ### threat_events
 
-Threat intelligence events.
+Threat intelligence detections. 180-day TTL.
 
 ```sql
 CREATE TABLE threat_events (
-    timestamp    DateTime,
-    asn          UInt32,
-    threat_type  String,
-    indicator    String,
-    source       String,
-    severity     UInt8
+    timestamp   DateTime,
+    asn         UInt32,
+    source      String,      -- e.g. 'Spamhaus (Exact)', 'Route Leak Guard'
+    category    String,      -- 'spamhaus', 'malware', 'route_leak', ...
+    target_ip   String,      -- offending prefix / IP
+    description String
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
-ORDER BY (asn, timestamp)
-TTL timestamp + INTERVAL 180 DAY;
+ORDER BY (timestamp, asn)
+TTL timestamp + INTERVAL 180 DAY DELETE;
+```
+
+### daily_metrics
+
+Aggregation target for the materialized views below (SummingMergeTree).
+
+```sql
+CREATE TABLE daily_metrics (
+    date           Date,
+    asn            UInt32,
+    total_events   UInt32,
+    announce_count UInt32,
+    withdraw_count UInt32,
+    threat_count   UInt32
+) ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (date, asn);
 ```
 
 ### asn_score_history
 
-Historical score records. **No TTL** — retained indefinitely for trending analysis.
+Historical score records. **No TTL** — retained indefinitely for trend analysis.
 
 ```sql
 CREATE TABLE asn_score_history (
@@ -125,73 +142,64 @@ ORDER BY (asn, timestamp);
 -- No TTL: score history is retained indefinitely
 ```
 
-### api_requests
-
-API access log for audit and analytics.
-
-```sql
-CREATE TABLE api_requests (
-    timestamp    DateTime,
-    asn          UInt32,
-    api_key_hash String,
-    response_ms  UInt32,
-    cache_hit    UInt8
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(timestamp)
-ORDER BY (timestamp, asn)
-TTL timestamp + INTERVAL 30 DAY;
-```
-
 ### forensic_metrics
 
-Aggregated forensic signal data.
+Aggregated BGP-prepending counts (SummingMergeTree), fed by `forensic_prepending_mv`.
 
 ```sql
 CREATE TABLE forensic_metrics (
-    day                       Date,
-    asn                       UInt32,
-    ddos_blackhole_count      UInt32,
-    excessive_prepending_count UInt32
+    date           Date,
+    asn            UInt32,
+    prepends_count UInt32
 ) ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMM(day)
-ORDER BY (asn, day);
+PARTITION BY toYYYYMM(date)
+ORDER BY (date, asn);
 ```
 
-### bgp_daily_mv
+### api_requests
 
-Materialized view for daily BGP aggregates.
+API access log for audit and analytics. 30-day TTL.
 
 ```sql
-CREATE MATERIALIZED VIEW bgp_daily_mv
-ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMM(day)
-ORDER BY (asn, day)
-AS SELECT
-    toDate(timestamp) AS day,
-    asn,
-    countIf(event_type = 'A') AS announcements,
-    countIf(event_type = 'W') AS withdrawals,
-    uniqExact(prefix) AS unique_prefixes
+CREATE TABLE api_requests (
+    timestamp        DateTime,
+    endpoint         String,
+    method           String,
+    status_code      UInt16,
+    response_time_ms Float64,
+    cache_hit        UInt8,
+    client_ip        String,
+    error_message    String
+) ENGINE = MergeTree()
+PARTITION BY toDate(timestamp)
+ORDER BY (timestamp, endpoint)
+TTL timestamp + INTERVAL 30 DAY DELETE;
+```
+
+### Materialized views
+
+`bgp_daily_mv` and `threat_daily_mv` both write into `daily_metrics`; `forensic_prepending_mv` writes into `forensic_metrics`.
+
+```sql
+CREATE MATERIALIZED VIEW bgp_daily_mv TO daily_metrics AS
+SELECT toDate(timestamp) AS date, asn,
+       count() AS total_events,
+       countIf(event_type = 'announce') AS announce_count,
+       countIf(event_type = 'withdraw') AS withdraw_count,
+       0 AS threat_count
+FROM bgp_events GROUP BY date, asn;
+
+CREATE MATERIALIZED VIEW threat_daily_mv TO daily_metrics AS
+SELECT toDate(timestamp) AS date, asn,
+       0 AS total_events, 0 AS announce_count, 0 AS withdraw_count,
+       count() AS threat_count
+FROM threat_events GROUP BY date, asn;
+
+CREATE MATERIALIZED VIEW forensic_prepending_mv TO forensic_metrics AS
+SELECT toDate(timestamp) AS date, asn, count() AS prepends_count
 FROM bgp_events
-GROUP BY day, asn;
-```
-
-### threat_daily_mv
-
-Materialized view for daily threat aggregates.
-
-```sql
-CREATE MATERIALIZED VIEW threat_daily_mv
-ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMM(day)
-ORDER BY (asn, day)
-AS SELECT
-    toDate(timestamp) AS day,
-    asn,
-    threat_type,
-    count() AS event_count
-FROM threat_events
-GROUP BY day, asn, threat_type;
+WHERE countEqual(path, asn) > 3
+GROUP BY date, asn;
 ```
 
 ## Data Model Relationships

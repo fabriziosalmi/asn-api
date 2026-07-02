@@ -247,7 +247,7 @@ curl http://localhost:80/api/health
 {
   "status": "healthy",
   "timestamp": "2026-03-29T10:00:00.000000",
-  "version": "7.4.0",
+  "version": "7.5.0",
   "dependencies": {
     "postgres": "up",
     "clickhouse": "up",
@@ -478,7 +478,7 @@ The `type` field reflects the PeeringDB `info_type`: `"NSP"` (Network Service Pr
 
 Returns a plain-text External Dynamic List (EDL) of all ASNs with a risk score at or below the specified threshold. Compatible with Palo Alto Networks, Fortinet FortiGate, Check Point, and any firewall that accepts plain-text IP/AS block lists.
 
-**Does not require authentication.** The list is intended for firewall automation and must be publicly accessible to the device polling it.
+**Requires the `X-API-Key` header.** Configure your firewall's EDL source to send it (PAN-OS and FortiGate both support custom request headers on external feeds).
 
 ### Parameters
 
@@ -486,17 +486,19 @@ Returns a plain-text External Dynamic List (EDL) of all ASNs with a risk score a
 |------|------|----------|---------|-------------|
 | max_score | float | No | 50.0 | Include ASNs with score ≤ this value (0.0–100.0) |
 
+Risk bands: CRITICAL `<50`, HIGH `50-69`, MEDIUM `70-89`, LOW `≥90`.
+
 ### Request
 
 ```bash
-# Default: all CRITICAL+HIGH ASNs (score ≤ 50)
-curl http://localhost:80/api/feeds/edl
+# Default: all CRITICAL ASNs plus the HIGH-band boundary (score ≤ 50)
+curl -H "X-API-Key: $API_KEY" http://localhost:80/api/feeds/edl
 
 # Strict: only CRITICAL ASNs (score ≤ 49)
-curl "http://localhost:80/api/feeds/edl?max_score=49"
+curl -H "X-API-Key: $API_KEY" "http://localhost:80/api/feeds/edl?max_score=49"
 
 # Broad: any ASN not fully trusted (score ≤ 89)
-curl "http://localhost:80/api/feeds/edl?max_score=89"
+curl -H "X-API-Key: $API_KEY" "http://localhost:80/api/feeds/edl?max_score=89"
 ```
 
 ### Response
@@ -519,6 +521,7 @@ Content-Type: `text/plain`
 Objects → External Dynamic Lists → Add
 Type: Predefined IP/Domain (use "IP List" with ASN filter in policy)
 Source: http://your-asn-api/api/feeds/edl?max_score=50
+Header: X-API-Key: <your key>
 Refresh: every 5 minutes
 ```
 
@@ -537,17 +540,21 @@ See [Integrations Guide](/guide/integrations) for complete firewall configuratio
 
 Real-time firehose of ASN score update events over a persistent WebSocket connection. Each message is a JSON object published to the Redis `events:asn_updates` channel after each scoring cycle.
 
-Authentication is passed as a **query parameter** (not a header) because WebSocket upgrade requests cannot carry custom headers in most browsers.
+Authentication uses the `X-API-Key` handshake header (preferred). An `api_key` query parameter is accepted as a fallback for clients (e.g. browsers) that cannot set handshake headers — but it appears in URLs and access logs, so prefer the header.
 
 ### Connection
 
 ```
+# Preferred — key in the handshake header
+ws://localhost:80/api/v1/stream        (header: X-API-Key: YOUR_KEY)
+
+# Fallback — key in the query string
 ws://localhost:80/api/v1/stream?api_key=YOUR_KEY
 ```
 
 ### Authentication
 
-The `api_key` query parameter is required. The connection is closed with code `1008` (Policy Violation) if the key is missing or invalid.
+Supply the key via the `X-API-Key` header or the `api_key` query parameter. The connection is closed with code `1008` (Policy Violation) if the key is missing or invalid.
 
 ### Message Format
 

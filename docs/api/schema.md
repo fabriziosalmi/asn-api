@@ -142,7 +142,7 @@ All error responses follow a consistent structure with a stable `code` for progr
 ```typescript
 interface ErrorResponse {
   error: string        // Human-readable message
-  code: string         // Machine-readable error code (e.g. "ASN_NOT_FOUND")
+  code: string         // Machine-readable error code, e.g. "HTTP_404", "RATE_LIMITED", "INTERNAL_ERROR"
   request_id: string   // Correlates to X-Trace-ID response header
 }
 ```
@@ -151,8 +151,8 @@ interface ErrorResponse {
 
 ```json
 {
-  "error": "ASN 99999999 not found in database",
-  "code": "ASN_NOT_FOUND",
+  "error": "ASN not found or not yet scored",
+  "code": "HTTP_404",
   "request_id": "1711700400-a1b2c3d4"
 }
 ```
