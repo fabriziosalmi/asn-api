@@ -1,10 +1,11 @@
 repos:
+  # ruff for linting only; black is the single source of truth for formatting
+  # (ruff-format would fight black — CI runs `ruff check` + `black --check`).
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.8.6
     hooks:
       - id: ruff
         args: [--fix]
-      - id: ruff-format
 
   - repo: https://github.com/psf/black
     rev: 24.10.0

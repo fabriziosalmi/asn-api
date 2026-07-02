@@ -1,28 +1,31 @@
 import requests
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from urllib.parse import urljoin
 from .exceptions import APIError, RateLimitExceeded, ConfigurationError
+
 
 class AsnApiClient:
     """
     Client for interacting with the ASN Intelligence API.
     """
-    
+
     def __init__(self, base_url: str, api_key: str):
         if not base_url:
             raise ConfigurationError("base_url must be provided")
         if not api_key:
             raise ConfigurationError("api_key must be provided")
-            
+
         self.base_url = base_url if base_url.endswith("/") else base_url + "/"
         self.api_key = api_key
-        
+
         self.session = requests.Session()
-        self.session.headers.update({
-            "x-api-key": self.api_key,
-            "Accept": "application/json",
-            "User-Agent": "asn-api-python-sdk/1.0.0"
-        })
+        self.session.headers.update(
+            {
+                "x-api-key": self.api_key,
+                "Accept": "application/json",
+                "User-Agent": "asn-api-python-sdk/1.0.0",
+            }
+        )
 
     def _request(self, method: str, path: str, raw: bool = False, **kwargs) -> Any:
         url = urljoin(self.base_url, path)
@@ -36,13 +39,16 @@ class AsnApiClient:
             return response.text if raw else response.json()
 
         except requests.exceptions.HTTPError as e:
-            if getattr(e, 'response', None) is not None:
+            if getattr(e, "response", None) is not None:
                 try:
                     error_data = e.response.json()
                     detail = error_data.get("detail", str(e))
                 except ValueError:
                     detail = e.response.text or str(e)
-                raise APIError(f"HTTP {e.response.status_code}: {detail}", status_code=e.response.status_code)
+                raise APIError(
+                    f"HTTP {e.response.status_code}: {detail}",
+                    status_code=e.response.status_code,
+                )
             raise APIError(str(e))
         except requests.exceptions.RequestException as e:
             raise APIError(f"Request failed: {str(e)}")
@@ -75,7 +81,9 @@ class AsnApiClient:
 
     def get_edl(self, max_score: float = 50.0) -> str:
         """Get an External Dynamic List (EDL) of malicious ASNs for firewalls in plain text."""
-        return self._request("GET", "feeds/edl", raw=True, params={"max_score": max_score})
+        return self._request(
+            "GET", "feeds/edl", raw=True, params={"max_score": max_score}
+        )
 
     def get_health(self) -> Dict[str, Any]:
         """Check API health and status."""
@@ -90,4 +98,3 @@ class AsnApiClient:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-
