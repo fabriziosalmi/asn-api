@@ -3,7 +3,6 @@
 import asyncio
 import ipaddress
 import os
-import random
 import re
 import threading
 import time
@@ -31,7 +30,7 @@ CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")
 REDIS_URL = os.getenv("BROKER_URL", "redis://broker-cache:6379/0")
 
 # --- Task interval constants ---
-THREAT_INTEL_INTERVAL = 21600   # 6 hours
+THREAT_INTEL_INTERVAL = 21600  # 6 hours
 ROUTE_LEAK_SCAN_INTERVAL = 300  # 5 minutes
 
 
@@ -45,9 +44,6 @@ class DataIngestor:
         self.redis_client = redis.Redis.from_url(REDIS_URL)
         self.celery_app = Celery("ingestor", broker=REDIS_URL)
         self.running = True
-
-        # Test ASNs to simulate traffic for
-        self.watched_asns = [15169, 2914, 174, 3356, 12345, 666, 9999, 45102]
 
     def _ch_execute_sync(self, query: str, params=None):
         """Thread-safe wrapper around ch_client.execute()."""
@@ -160,71 +156,6 @@ class DataIngestor:
         except Exception as e:
             logger.error("bgp_flush_error source=%s error=%s", source_label, e)
 
-    async def simulate_bgp_stream(self) -> None:
-        """Simulates a continuous stream of BGP updates."""
-        logger.info("bgp_simulation_start")
-        while self.running:
-            batch = []
-            for _ in range(random.randint(1, 10)):
-                asn = random.choice(self.watched_asns)
-                event_type = random.choice(["announce", "withdraw"])
-                prefix = f"{random.randint(1, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}.0/24"
-
-                event = {
-                    "timestamp": datetime.now(),
-                    "asn": asn,
-                    "prefix": prefix,
-                    "event_type": event_type,
-                    "upstream_as": random.choice(self.watched_asns),
-                    "path": [asn, random.choice(self.watched_asns)],
-                    "community": [65000 + random.randint(1, 100)],
-                }
-                batch.append(event)
-
-            if batch:
-                try:
-                    await self._flush_bgp_batch(batch, "SIM")
-                except Exception as e:
-                    logger.error("bgp_sim_write_error error=%s", e)
-
-            await asyncio.sleep(random.uniform(0.5, 2.0))
-
-    async def simulate_threat_intel_feed(self) -> None:
-        """Simulates fetching threat intelligence feeds every 30 seconds."""
-        logger.info("threat_sim_start")
-        while self.running:
-            logger.debug("threat_sim_cycle")
-            bad_asn = 666
-
-            threat_event = [
-                {
-                    "timestamp": datetime.now(),
-                    "asn": bad_asn,
-                    "source": "simulated_feed",
-                    "category": "spam",
-                    "target_ip": "1.2.3.4",
-                    "description": "detected spam emission",
-                }
-            ]
-
-            try:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(
-                    None,
-                    lambda te=threat_event: self._ch_execute_sync(
-                        "INSERT INTO threat_events (timestamp, asn, source, category, target_ip, description) VALUES",
-                        te,
-                    ),
-                )
-                logger.info("threat_sim_logged asn=%s", bad_asn)
-
-                self.redis_client.lpush("scoring_queue", bad_asn)
-
-            except Exception as e:
-                logger.error("threat_sim_error error=%s", e)
-
-            await asyncio.sleep(30)
-
     async def fetch_threat_intelligence(self) -> None:
         """Fetches REAL Threat Intel Feeds and correlates them. Runs every 6 hours."""
         logger.info("threat_intel_start")
@@ -336,12 +267,19 @@ class DataIngestor:
                                     break
 
                         if source_match:
+                            # Precise category so the scorer can derive the
+                            # right signal (spamhaus_listed vs malware count).
+                            category = (
+                                "spamhaus"
+                                if source_match.startswith("Spamhaus")
+                                else "malware"
+                            )
                             threat_event = [
                                 {
                                     "timestamp": datetime.now(),
                                     "asn": route_asn,
                                     "source": source_match,
-                                    "category": "botnet/malware",
+                                    "category": category,
                                     "target_ip": route_prefix,
                                     "description": f"{source_match} detection on {route_prefix}",
                                 }
@@ -359,7 +297,9 @@ class DataIngestor:
                             def _log_ch_threat_error(fut):
                                 exc = fut.exception()
                                 if exc:
-                                    logger.warning("ch_threat_insert_failed error=%s", exc)
+                                    logger.warning(
+                                        "ch_threat_insert_failed error=%s", exc
+                                    )
 
                             _fut.add_done_callback(_log_ch_threat_error)
                             self.celery_app.send_task(
@@ -479,7 +419,9 @@ class DataIngestor:
                                 def _log_ch_leak_error(fut):
                                     exc = fut.exception()
                                     if exc:
-                                        logger.warning("ch_leak_insert_failed error=%s", exc)
+                                        logger.warning(
+                                            "ch_leak_insert_failed error=%s", exc
+                                        )
 
                                 _fut.add_done_callback(_log_ch_leak_error)
                                 self.celery_app.send_task(

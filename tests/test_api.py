@@ -382,17 +382,23 @@ def test_bulk_risk_check_high_risk_present(client, api_key, mock_dependencies):
 # EDL feed — M247 (HIGH risk, Spamhaus-listed) + generic blocked ASN
 # ---------------------------------------------------------------------------
 
-def test_get_edl_feed(client, mock_dependencies):
+def test_get_edl_feed(client, api_key, mock_dependencies):
     mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
     mock_pg_conn.execute.return_value.fetchall.return_value = [
         (ASN_9009_M247_HIGH_RISK["asn"],),
         (666,),
     ]
 
-    response = client.get("/feeds/edl?max_score=50")
+    response = client.get("/feeds/edl?max_score=50", headers={"X-API-Key": api_key})
     assert response.status_code == 200
     assert f"AS{ASN_9009_M247_HIGH_RISK['asn']}" in response.text
     assert "AS666" in response.text
+
+
+def test_edl_feed_requires_auth(client):
+    """EDL must not dump the ASN inventory to anonymous callers (H2)."""
+    response = client.get("/feeds/edl?max_score=100")
+    assert response.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -1226,7 +1232,7 @@ def test_compat_bulk_risk_check_route(client, api_key, mock_dependencies):
 # EDL feed DB error → 500 (lines 1124-1127)
 # ---------------------------------------------------------------------------
 
-def test_edl_feed_db_error_returns_500(client, mock_dependencies):
+def test_edl_feed_db_error_returns_500(client, api_key, mock_dependencies):
     """When the DB raises during EDL generation the endpoint returns 500."""
     mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute = mock_dependencies
 
@@ -1239,7 +1245,7 @@ def test_edl_feed_db_error_returns_500(client, mock_dependencies):
 
     mock_pg.begin.return_value = _FailCtx()
 
-    response = client.get("/feeds/edl?max_score=50")
+    response = client.get("/feeds/edl?max_score=50", headers={"X-API-Key": api_key})
     assert response.status_code == 500
 
 

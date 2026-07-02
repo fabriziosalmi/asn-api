@@ -49,7 +49,7 @@ jobs:
 
     - name: Run tests
       env:
-        API_SECRET_KEY: test-secret-key
+        API_SECRET_KEY: test-secret-key-padding-to-32bytes!!
         POSTGRES_USER: test_user
         POSTGRES_PASSWORD: test_pass
         LOG_FORMAT: text

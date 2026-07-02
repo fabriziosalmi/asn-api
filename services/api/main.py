@@ -1,6 +1,5 @@
 # Copyright by Fabrizio Salmi (fabrizio.salmi@gmail.com)
 
-import json
 import time
 import orjson
 import httpx
@@ -14,7 +13,17 @@ import urllib.parse
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Security, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Security,
+    Depends,
+    Request,
+    Response,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -28,6 +37,8 @@ from typing import List, Optional, Dict
 import redis.asyncio as aioredis
 import asyncio
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from pythonjsonlogger.json import JsonFormatter as JsonLogFormatter
 
@@ -65,24 +76,55 @@ pg_engine = create_async_engine(
     max_overflow=settings.db_max_overflow,
     pool_pre_ping=True,
 )
-ch_client = Client(
-    host=settings.db_ts_host,
-    user=settings.clickhouse_user,
-    password=settings.clickhouse_password,
-)
+
+
+def _new_ch_client() -> Client:
+    return Client(
+        host=settings.db_ts_host,
+        user=settings.clickhouse_user,
+        password=settings.clickhouse_password,
+    )
+
+
+# Module-level client kept for the main thread / health probes and as a stable
+# patch target for tests. NEVER call .execute() on it from multiple threads.
+ch_client = _new_ch_client()
+
 # Dedicated thread pool for ClickHouse (clickhouse-driver is sync-only).
-# All CH calls MUST go through _ch_execute() so exceptions surface instead of
-# being silently swallowed by fire-and-forget executors.
-_ch_pool = __import__('concurrent.futures', fromlist=['ThreadPoolExecutor']).ThreadPoolExecutor(
+# clickhouse_driver.Client is NOT thread-safe (a single connection multiplexed
+# across threads corrupts the wire protocol), so each pool worker gets its OWN
+# Client via thread-local storage. All CH calls MUST go through _ch_execute()
+# so exceptions surface instead of being silently swallowed.
+_ch_pool = ThreadPoolExecutor(
     max_workers=settings.db_pool_size, thread_name_prefix="ch"
 )
+_ch_local = threading.local()
+
+
+def _thread_ch_client() -> Client:
+    """Return a Client owned exclusively by the calling pool thread."""
+    client = getattr(_ch_local, "client", None)
+    if client is None:
+        client = _new_ch_client()
+        _ch_local.client = client
+    return client
+
 
 async def _ch_execute(query: str, params=None):
-    """Run a sync ClickHouse query in the dedicated thread pool.
-    Raises on error — callers decide whether to propagate or catch."""
+    """Run a sync ClickHouse query in the dedicated thread pool, on a
+    per-thread Client. Raises on error — callers decide to propagate or catch."""
     loop = asyncio.get_running_loop()
-    fn = lambda: ch_client.execute(query, params) if params is not None else ch_client.execute(query)
+
+    def fn():
+        client = _thread_ch_client()
+        return (
+            client.execute(query, params)
+            if params is not None
+            else client.execute(query)
+        )
+
     return await loop.run_in_executor(_ch_pool, fn)
+
 
 # --- Async Redis ---
 redis_client: aioredis.Redis = aioredis.Redis(
@@ -115,9 +157,9 @@ end
 # --- Constants ---
 ASN_MIN = 1
 ASN_MAX = 4294967295
-API_VERSION = "7.4.1"
-STATS_TOTAL_COUNT_CACHE_TTL = 300   # 5 minutes
-PEERINGDB_CACHE_TTL = 86400          # 24 hours
+API_VERSION = "7.5.0"
+STATS_TOTAL_COUNT_CACHE_TTL = 300  # 5 minutes
+PEERINGDB_CACHE_TTL = 86400  # 24 hours
 
 
 # --- Lifespan ---
@@ -149,6 +191,14 @@ app = FastAPI(
         {"name": "Scoring", "description": "Core risk assessment endpoints."},
         {"name": "Analytics", "description": "Historical data and trends."},
         {"name": "System", "description": "Health checks and metadata."},
+        {
+            "name": "Enrichment",
+            "description": "External metadata enrichment (PeeringDB, DNS/ASN).",
+        },
+        {
+            "name": "Integrations",
+            "description": "Firewall feeds (EDL) and third-party integrations.",
+        },
     ],
     lifespan=lifespan,
 )
@@ -184,8 +234,7 @@ def _verify_api_key(provided: str | None) -> bool:
 
 async def get_api_key(request: Request, api_key_header: str = Security(api_key_header)):
     if not _verify_api_key(api_key_header):
-        client_ip = request.client.host if request.client else "unknown"
-        logger.warning("auth_failure", extra={"ip": client_ip})
+        logger.warning("auth_failure", extra={"ip": _client_ip(request)})
         raise HTTPException(status_code=403, detail="Invalid or Missing API Key")
     return api_key_header
 
@@ -335,7 +384,28 @@ def _stable_etag(value: str) -> str:
     return f'W/"{hashlib.sha256(value.encode()).hexdigest()[:16]}"'
 
 
+def _client_ip(request: Request) -> str:
+    """Resolve the real client IP behind the reverse proxy.
+
+    Prefers X-Real-IP (set by nginx to $remote_addr — the TCP peer, which a
+    client cannot forge because nginx overwrites any client-supplied value).
+    Falls back to the first X-Forwarded-For hop, then the direct peer. Without
+    this, every request appears to originate from the nginx container IP and
+    the per-IP rate limit degenerates into a single global bucket."""
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "0.0.0.0"
+
+
 # --- Middleware ---
+
+# Paths exempt from rate limiting: liveness/readiness probes and the metrics
+# scrape must never be throttled or blocked by a Redis hiccup.
+RATE_LIMIT_EXEMPT_PATHS = {"/health", "/", "/metrics"}
 
 
 @app.middleware("http")
@@ -349,53 +419,48 @@ async def request_middleware(request: Request, call_next):
     request.state.trace_id = trace_id
     request.state.cache_hit = False
 
-    # Rate Limiting (atomic)
-    client_ip = request.client.host if request.client else "0.0.0.0"
-    rate_limit_key = f"rl:{client_ip}"
+    # Rate Limiting (atomic) — keyed on the real client IP, not the proxy's.
+    client_ip = _client_ip(request)
     window = 60
+    remaining = settings.api_rate_limit
 
-    try:
-        current = await redis_client.eval(
-            RATE_LIMIT_SCRIPT, 
-            1, 
-            rate_limit_key, 
-            window, 
-            settings.api_rate_limit
-        )
-        remaining = max(0, settings.api_rate_limit - current)
-
-        if current > settings.api_rate_limit:
-            ttl = await redis_client.ttl(rate_limit_key)
-            return ORJSONResponse(
-                status_code=429,
-                content=ErrorEnvelope(
-                    error=f"Rate limit exceeded. Try again in {ttl} seconds.",
-                    code="RATE_LIMITED",
-                    request_id=trace_id,
-                ).model_dump(),
-                headers={
-                    "X-RateLimit-Limit": str(settings.api_rate_limit),
-                    "X-RateLimit-Remaining": "0",
-                    "X-RateLimit-Reset": str(int(time.time()) + ttl),
-                    "X-Trace-ID": trace_id,
-                    "Retry-After": str(ttl),
-                },
+    if request.url.path not in RATE_LIMIT_EXEMPT_PATHS:
+        rate_limit_key = f"rl:{client_ip}"
+        try:
+            current = await redis_client.eval(
+                RATE_LIMIT_SCRIPT,
+                1,
+                rate_limit_key,
+                window,
+                settings.api_rate_limit,
             )
-    except Exception as e:
-        logger.error("rate_limit_error", extra={"trace_id": trace_id, "error": str(e)})
-        return ORJSONResponse(
-            status_code=503,
-            content=ErrorEnvelope(
-                error="Rate limiting service unavailable",
-                code="RATE_LIMIT_ERROR",
-                request_id=trace_id,
-            ).model_dump(),
-            headers={
-                "X-RateLimit-Limit": str(settings.api_rate_limit),
-                "X-RateLimit-Remaining": "0",
-                "Retry-After": "5",
-            },
-        )
+            remaining = max(0, settings.api_rate_limit - current)
+
+            if current > settings.api_rate_limit:
+                ttl = await redis_client.ttl(rate_limit_key)
+                return ORJSONResponse(
+                    status_code=429,
+                    content=ErrorEnvelope(
+                        error=f"Rate limit exceeded. Try again in {ttl} seconds.",
+                        code="RATE_LIMITED",
+                        request_id=trace_id,
+                    ).model_dump(),
+                    headers={
+                        "X-RateLimit-Limit": str(settings.api_rate_limit),
+                        "X-RateLimit-Remaining": "0",
+                        "X-RateLimit-Reset": str(int(time.time()) + ttl),
+                        "X-Trace-ID": trace_id,
+                        "Retry-After": str(ttl),
+                    },
+                )
+        except Exception as e:
+            # Fail OPEN: a rate-limiter outage must not turn every request into a
+            # 503. Serve the request (L1/Redis/PG may still answer) and log loudly
+            # so the Redis problem is visible without cascading into an outage.
+            logger.warning(
+                "rate_limit_unavailable_fail_open",
+                extra={"trace_id": trace_id, "error": str(e)},
+            )
 
     response = await call_next(request)
     process_time = (time.time() - start_time) * 1000
@@ -451,10 +516,18 @@ def read_root():
     return {
         "service": "asn-api",
         "version": API_VERSION,
+        "docs": "/docs",
         "endpoints": [
             "/v1/asn/{asn}",
             "/v1/asn/{asn}/history",
             "/v1/asn/{asn}/upstreams",
+            "/v1/asn/{asn}/peeringdb",
+            "/v1/tools/compare",
+            "/v1/tools/bulk-risk-check",
+            "/v1/tools/domain-risk",
+            "/v1/whitelist",
+            "/v1/stream",
+            "/feeds/edl",
         ],
     }
 
@@ -625,7 +698,7 @@ async def get_asn_score(
     trace_id = getattr(request.state, "trace_id", "")
 
     cache_key = f"score:v3:{asn}"
-    
+
     # Check L1 cache (In-memory)
     cached_l1 = l1_cache.get(cache_key)
     if cached_l1:
@@ -647,7 +720,7 @@ async def get_asn_score(
             data = orjson.loads(cached)
             # Hydrate L1
             l1_cache[cache_key] = data
-            
+
             etag = _stable_etag(data["last_updated"])
             if request.headers.get("if-none-match") == etag:
                 return Response(status_code=304)
@@ -690,35 +763,39 @@ async def get_asn_score(
             row = result.mappings().fetchone()
             if not row:
                 return None
-            
+
             r_dict = dict(row)
             score = r_dict["total_score"]
-            
+
             if total_count_cached:
                 t_count = int(total_count_cached)
             else:
-                t_count_res = await conn.execute(text("SELECT count(*) FROM asn_registry"))
+                t_count_res = await conn.execute(
+                    text("SELECT count(*) FROM asn_registry")
+                )
                 t_count = t_count_res.scalar()
-            
+
             c_lower_res = await conn.execute(
                 text("SELECT count(*) FROM asn_registry WHERE total_score < :score"),
                 {"score": score},
             )
             c_lower = c_lower_res.scalar()
-            
+
             return r_dict, t_count, c_lower
 
     db_res = await _fetch_db_data()
-    
+
     if not db_res:
         raise HTTPException(status_code=404, detail="ASN not found or not yet scored")
-        
+
     result, total_count, count_lower = db_res
     score = result["total_score"]
 
     if not total_count_cached and total_count:
         try:
-            await redis_client.setex(cache_key_total, STATS_TOTAL_COUNT_CACHE_TTL, total_count)
+            await redis_client.setex(
+                cache_key_total, STATS_TOTAL_COUNT_CACHE_TTL, total_count
+            )
         except Exception as e:
             logger.warning("stats_cache_write_error", extra={"error": str(e)})
 
@@ -763,8 +840,7 @@ async def get_asn_score(
                 "spam_emission_rate": float(result["spam_emission_rate"] or 0),
                 "botnet_c2_count": result["botnet_c2_count"] or 0,
                 "phishing_hosting_count": result["phishing_hosting_count"] or 0,
-                "malware_distribution_count": result["malware_distribution_count"]
-                or 0,
+                "malware_distribution_count": result["malware_distribution_count"] or 0,
             },
             "metadata": {
                 "has_peeringdb_profile": result["has_peeringdb_profile"] or False,
@@ -773,9 +849,7 @@ async def get_asn_score(
             },
             "forensics": {
                 "ddos_blackhole_count": result.get("ddos_blackhole_count") or 0,
-                "excessive_prepending_count": result.get(
-                    "excessive_prepending_count"
-                )
+                "excessive_prepending_count": result.get("excessive_prepending_count")
                 or 0,
             },
         },
@@ -892,7 +966,7 @@ async def add_to_whitelist(
 async def compare_asns(
     asn_a: int = Query(..., description="First ASN to compare"),
     asn_b: int = Query(..., description="Second ASN to compare"),
-    api_key: str = Depends(get_api_key)
+    api_key: str = Depends(get_api_key),
 ):
     """
     Compare two ASNs side-by-side to understand relative risk profiles.
@@ -912,7 +986,7 @@ async def compare_asns(
     async with pg_engine.begin() as conn:
         result = await conn.execute(query, {"asn_a": asn_a, "asn_b": asn_b})
         rows = result.mappings().fetchall()
-    
+
     if len(rows) != 2:
         found_asns = [r["asn"] for r in rows]
         missing = [a for a in (asn_a, asn_b) if a not in found_asns]
@@ -1138,22 +1212,33 @@ async def bulk_risk_check_compat(
 async def get_peer_pressure_compat(asn: int, api_key: str = Depends(get_api_key)):
     return await get_peer_pressure(asn, api_key)
 
+
 @app.get("/feeds/edl", tags=["Integrations"])
-async def get_edl_feed(max_score: float = Query(50.0, ge=0.0, le=100.0)):
+async def get_edl_feed(
+    max_score: float = Query(50.0, ge=0.0, le=100.0),
+    api_key: str = Depends(get_api_key),
+):
     """
     Feed for Firewalls (Palo Alto EDL, Fortinet, etc).
     Returns a plaintext list of ASNs (ASXXXX) below the maximum given risk score.
+
+    Requires `X-API-Key` (Palo Alto/Fortinet EDL sources support a custom
+    header / basic auth) — without it this endpoint would dump the entire
+    scored ASN inventory to any anonymous caller.
     """
     try:
+
         async def _fetch_edl():
             async with pg_engine.begin() as conn:
                 result = await conn.execute(
-                    text("SELECT asn FROM asn_registry WHERE total_score <= :max_score ORDER BY asn ASC"),
-                    {"max_score": max_score}
+                    text(
+                        "SELECT asn FROM asn_registry WHERE total_score <= :max_score ORDER BY asn ASC"
+                    ),
+                    {"max_score": max_score},
                 )
                 rows = result.fetchall()
                 return [f"AS{row[0]}" for row in rows]
-                
+
         edl_lines = await _fetch_edl()
         return PlainTextResponse("\n".join(edl_lines))
     except Exception as e:
@@ -1162,17 +1247,24 @@ async def get_edl_feed(max_score: float = Query(50.0, ge=0.0, le=100.0)):
 
 
 @app.websocket("/v1/stream")
-async def websocket_firehose(websocket: WebSocket, api_key: str = Query(...)):
+async def websocket_firehose(
+    websocket: WebSocket, api_key: Optional[str] = Query(default=None)
+):
     """
     Real-time firehose of ASN score updates over WebSocket.
+
+    Auth: prefer the `X-API-Key` handshake header (keeps the secret out of URLs
+    and proxy access logs). The `api_key` query param remains as a fallback for
+    browser clients that cannot set handshake headers.
 
     Architecture: bounded asyncio.Queue + producer/consumer task split.
     - QUEUE_MAX: max messages buffered per connection; excess drops the client (OOM guard).
     - SEND_TIMEOUT: force-disconnect stalled clients that can't drain their TCP buffer in time.
     - HEARTBEAT_INTERVAL: periodic ping to reap zombie connections (silent disconnects).
     """
+    provided_key = websocket.headers.get("x-api-key") or api_key
     await websocket.accept()
-    if not _verify_api_key(api_key):
+    if not _verify_api_key(provided_key):
         logger.warning("ws_auth_failure")
         await websocket.close(code=1008)
         return
@@ -1217,9 +1309,7 @@ async def websocket_firehose(websocket: WebSocket, api_key: str = Query(...)):
                 # Poison pill from producer (overflow or error) — close cleanly.
                 await websocket.close(code=1008)
                 return
-            await asyncio.wait_for(
-                websocket.send_text(data), timeout=SEND_TIMEOUT
-            )
+            await asyncio.wait_for(websocket.send_text(data), timeout=SEND_TIMEOUT)
 
     producer_task = asyncio.create_task(_producer())
     try:
@@ -1228,7 +1318,12 @@ async def websocket_firehose(websocket: WebSocket, api_key: str = Query(...)):
         logger.info("ws_firehose_disconnect")
     finally:
         producer_task.cancel()
-        await pubsub.unsubscribe("events:asn_updates")
+        try:
+            await pubsub.unsubscribe("events:asn_updates")
+        finally:
+            # Release the dedicated pubsub connection back to the pool — without
+            # this every WS client permanently leaks a Redis connection.
+            await pubsub.aclose()
 
 
 @app.get("/v1/asn/{asn}/peeringdb", tags=["Enrichment"])
@@ -1248,12 +1343,12 @@ async def get_peeringdb_info(asn: int, api_key: str = Depends(get_api_key)):
         # Fetch from PeeringDB (no auth required for public data)
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"https://www.peeringdb.com/api/net?asn={asn}")
-            
+
             if resp.status_code != 200:
                 raise HTTPException(status_code=502, detail="Upstream PeeringDB error")
-                
+
             data = resp.json()
-            
+
             if not data.get("data"):
                 result = {"asn": asn, "found": False, "peeringdb_data": None}
             else:
@@ -1267,17 +1362,20 @@ async def get_peeringdb_info(asn: int, api_key: str = Depends(get_api_key)):
                         "website": pdb.get("website"),
                         "ix_count": pdb.get("ix_count", 0),
                         "fac_count": pdb.get("fac_count", 0),
-                        "peering_policy": pdb.get("policy_general")
-                    }
+                        "peering_policy": pdb.get("policy_general"),
+                    },
                 }
-            
+
             # Cache for 24 hours
-            await redis_client.setex(cache_key, PEERINGDB_CACHE_TTL, orjson.dumps(result))
+            await redis_client.setex(
+                cache_key, PEERINGDB_CACHE_TTL, orjson.dumps(result)
+            )
             return result
-            
+
     except httpx.RequestError as e:
         logger.error("peeringdb_fetch_error", extra={"asn": asn, "error": str(e)})
         raise HTTPException(status_code=503, detail="Failed to reach PeeringDB")
+
 
 @app.get("/v1/tools/domain-risk", tags=["Scoring", "Enrichment"])
 async def get_domain_risk(
@@ -1292,40 +1390,47 @@ async def get_domain_risk(
     """
     try:
         # Step 1: Resolve Domain to IP
-        answers = await dns.asyncresolver.resolve(domain, 'A')
+        answers = await dns.asyncresolver.resolve(domain, "A")
         ip_address = answers[0].to_text()
-        
+
         # SSRF Protection
         ip_obj = ipaddress.ip_address(ip_address)
         if not ip_obj.is_global:
-            raise HTTPException(status_code=400, detail="Domain resolves to a local or private IP")
-            
+            raise HTTPException(
+                status_code=400, detail="Domain resolves to a local or private IP"
+            )
+
     except Exception as e:
-        if isinstance(e, HTTPException): raise e
-        raise HTTPException(status_code=400, detail=f"Could not resolve domain: {domain}")
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(
+            status_code=400, detail=f"Could not resolve domain: {domain}"
+        )
 
     # Step 2: Resolve IP to ASN via Cymru
-    reversed_ip = '.'.join(reversed(ip_address.split('.')))
+    reversed_ip = ".".join(reversed(ip_address.split(".")))
     query_str = f"{reversed_ip}.origin.asn.cymru.com"
-    
+
     asn = None
     try:
-        answers = await dns.asyncresolver.resolve(query_str, 'TXT')
+        answers = await dns.asyncresolver.resolve(query_str, "TXT")
         for rdata in answers:
             txt = rdata.to_text().strip('"')
             # Extract ASN, handle multiple ASNs like "13335 13335" by picking the first
-            asn_str = txt.split('|')[0].strip()
+            asn_str = txt.split("|")[0].strip()
             asn = int(asn_str.split()[0])
             break
     except Exception as e:
-        logger.warning("cymru_resolution_failed", extra={"ip": ip_address, "error": str(e)})
-        
+        logger.warning(
+            "cymru_resolution_failed", extra={"ip": ip_address, "error": str(e)}
+        )
+
     if not asn:
         return {
             "domain": domain,
             "resolved_ip": ip_address,
             "asn": None,
-            "error": "Could not map IP to an ASN"
+            "error": "Could not map IP to an ASN",
         }
 
     # Step 3: Fetch Risk Data from our DB
@@ -1340,12 +1445,12 @@ async def get_domain_risk(
     async with pg_engine.begin() as conn:
         result = await conn.execute(query_db, {"asn": asn})
         row = result.mappings().fetchone()
-    
+
     asn_data = dict(row) if row else {"asn": asn, "status": "Not scored yet"}
 
     return {
         "domain": domain,
         "resolved_ip": ip_address,
         "asn": asn,
-        "infrastructure_risk": asn_data
+        "infrastructure_risk": asn_data,
     }

@@ -5,8 +5,10 @@ import sys
 import os
 from unittest.mock import MagicMock, patch, AsyncMock
 
-# Set required env vars before importing app
-os.environ.setdefault("API_SECRET_KEY", "test-secret-key")
+# Set required env vars before importing app.
+# API_SECRET_KEY must satisfy the settings min_length=32 constraint.
+TEST_API_SECRET = "test-secret-key-padding-to-32bytes!!"
+os.environ.setdefault("API_SECRET_KEY", TEST_API_SECRET)
 os.environ.setdefault("POSTGRES_USER", "test_user")
 os.environ.setdefault("POSTGRES_PASSWORD", "test_pass")
 os.environ.setdefault("POSTGRES_DB", "test_db")
@@ -41,6 +43,7 @@ with patch("redis.asyncio.Redis"), patch("sqlalchemy.create_engine"), patch(
 def mock_dependencies():
     # Clear the module-level L1 in-memory cache so tests don't interfere with each other
     from api.main import l1_cache
+
     l1_cache.clear()
 
     mock_redis = AsyncMock()
@@ -53,14 +56,15 @@ def mock_dependencies():
 
     mock_pg = MagicMock()
     mock_pg_conn = AsyncMock()
-    
+
     # Context manager setup for async with pg_engine.begin()
     class AsyncContextManagerMock:
         async def __aenter__(self):
             return mock_pg_conn
+
         async def __aexit__(self, exc_type, exc_val, exc_tb):
             pass
-            
+
     mock_pg.begin.return_value = AsyncContextManagerMock()
     mock_pg_conn.execute = AsyncMock(return_value=MagicMock())
 
@@ -87,4 +91,4 @@ def client():
 
 @pytest.fixture
 def api_key():
-    return "test-secret-key"
+    return TEST_API_SECRET

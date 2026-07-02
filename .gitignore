@@ -52,3 +52,6 @@ docs/.vitepress/cache/
 
 
 RULES.md
+# Workspace settings
+.claude/
+.ruff_cache/
