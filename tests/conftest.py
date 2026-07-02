@@ -33,8 +33,10 @@ sys.path.insert(1, _engine_path)
 sys.path.insert(2, _services_path)
 
 # Mock dependencies before importing app (since it connects on import)
-with patch("redis.asyncio.Redis"), patch("sqlalchemy.create_engine"), patch(
-    "clickhouse_driver.Client"
+with (
+    patch("redis.asyncio.Redis"),
+    patch("sqlalchemy.create_engine"),
+    patch("clickhouse_driver.Client"),
 ):
     from api.main import app
 
@@ -74,10 +76,11 @@ def mock_dependencies():
     # Patch it directly so tests don't spin real threads via run_in_executor.
     mock_ch_execute = AsyncMock(return_value=[])
 
-    with patch("api.main.redis_client", mock_redis), patch(
-        "api.main.pg_engine", mock_pg
-    ), patch("api.main.ch_client", mock_ch), patch(
-        "api.main._ch_execute", mock_ch_execute
+    with (
+        patch("api.main.redis_client", mock_redis),
+        patch("api.main.pg_engine", mock_pg),
+        patch("api.main.ch_client", mock_ch),
+        patch("api.main._ch_execute", mock_ch_execute),
     ):
         yield (mock_redis, mock_pg, mock_ch, mock_pg_conn, mock_ch_execute)
 
