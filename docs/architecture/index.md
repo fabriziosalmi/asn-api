@@ -76,7 +76,7 @@ Performs scoring calculations:
 
 - Celery worker processing task queue
 - Queries ClickHouse for time-series aggregations
-- Calculates weighted risk scores
+- Calculates additive risk scores (penalties/bonuses from 100)
 - Updates PostgreSQL with current state
 
 ### API
@@ -122,13 +122,13 @@ Request
    │
    ▼
 ┌─────────────────────────────┐
-│  L1: In-process TTLCache    │  maxsize=5000, ~30s TTL
+│  L1: In-process TTLCache    │  maxsize=5000, TTL = CACHE_TTL (default 60s)
 │  Key: score:v3:{asn}        │  (Python cachetools, per worker)
 └─────────────────────────────┘
    │ MISS
    ▼
 ┌─────────────────────────────┐
-│  L2: Redis                  │  5-minute TTL
+│  L2: Redis                  │  TTL = CACHE_TTL (default 60s)
 │  Key: score:v3:{asn}        │  Shared across all API workers
 └─────────────────────────────┘
    │ MISS
@@ -138,11 +138,11 @@ Request
 └─────────────────────────────┘
 ```
 
-The `X-Cache-Tier` response header tells the client which layer served the request: `L1`, `L2`, or `DB`.
+The `X-Cache-Tier` response header tells the client which layer served the request: `L1` or `L2` (absent on a database miss).
 
 Special keys:
 - `stats:asn_total_count` — total scored ASN count, cached 300 seconds
-- PeeringDB data — cached under `peeringdb:{asn}` for 86400 seconds (24 h)
+- PeeringDB data — cached under `peeringdb:asn:{asn}` for 86400 seconds (24 h)
 
 Cache invalidation: `DELETE /v1/internal/cache/{asn}` (internal endpoint, not exposed at nginx level).
 
@@ -181,12 +181,14 @@ Backpressure: if a client's queue exceeds 100 messages the connection is closed 
 
 ## Rate Limiting
 
-Rate limiting is enforced in nginx via a Lua sliding-window log algorithm.
+Rate limiting is enforced in the FastAPI middleware via a Redis Lua sliding-window log algorithm (nginx does no rate limiting).
 
 - **Window**: 60 seconds
 - **Default limit**: 100 requests/window
-- **Key**: per client IP (`rl:{client_ip}`)
+- **Key**: per client IP (`rl:{client_ip}`), where the IP is taken from `X-Real-IP`/`X-Forwarded-For` set by nginx
 - **Storage**: Redis sorted set (entries older than 60s are pruned on each request)
+- **Exempt paths**: `/health`, `/`, `/metrics`
+- **Fail-open**: if Redis is unavailable the request is served (and logged), rather than returning 503
 
 Headers returned on every request:
 
@@ -208,20 +210,22 @@ Client
 ┌──────────────────────────────────────────┐
 │  nginx (port 80)                          │
 │  • /api/ → reverse proxy to asn-api:8000  │
-│  • Rate limit check via Lua script        │
+│  • Sets X-Real-IP / X-Forwarded-For       │
 │  • Security headers added                 │
+│  • Blocks /api/metrics (403)              │
 │  • WebSocket upgrade at /api/v1/stream    │
 └──────────────────────────────────────────┘
   │
   ▼
 ┌──────────────────────────────────────────┐
 │  FastAPI (port 8000)                      │
-│  1. API key validation middleware         │
-│  2. X-Trace-ID generation                 │
-│  3. L1 cache lookup                       │
-│  4. L2 Redis lookup                       │
-│  5. PostgreSQL/ClickHouse query (on miss) │
-│  6. ORJSONResponse serialization          │
+│  1. X-Trace-ID generation                 │
+│  2. Rate-limit check (Redis Lua, per IP)  │
+│  3. API key validation (per-route dep)    │
+│  4. L1 cache lookup                       │
+│  5. L2 Redis lookup                       │
+│  6. PostgreSQL/ClickHouse query (on miss) │
+│  7. ORJSONResponse serialization          │
 └──────────────────────────────────────────┘
 ```
 
@@ -231,7 +235,7 @@ Client
 
 ### Prometheus Metrics
 
-The API exposes metrics at `/metrics` (Prometheus format, no auth required). Add to your Prometheus scrape config:
+The API container exposes metrics at `asn-api:8000/metrics` (Prometheus format). Scrape it on the internal Docker network — the public edge blocks `/api/metrics` with a 403. Prometheus scrape config:
 
 ```yaml
 - job_name: asn-api
@@ -242,7 +246,7 @@ The API exposes metrics at `/metrics` (Prometheus format, no auth required). Add
 
 ### Grafana Dashboards
 
-Four pre-built dashboards ship with the platform under `services/dashboard/dashboards/`:
+Five pre-built dashboards ship with the platform under `services/dashboard/dashboards/`:
 
 | Dashboard | Purpose |
 |-----------|---------|

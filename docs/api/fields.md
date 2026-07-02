@@ -59,8 +59,8 @@ Detailed explanation of all response fields and their meanings.
 ### rank_percentile
 - **Type**: Float (0.00-100.00)
 - **Description**: Global safety ranking compared to all other ASNs
-- **Example**: `95.4` means this ASN is less risky than 95.4% of the global internet
-- **Interpretation**: Higher is better. 99+ is Elite, <50 is Hazardous.
+- **Example**: `95.4` means this ASN scores higher than 95.4% of scored ASNs
+- **Interpretation**: Higher is better (computed as the share of ASNs with a strictly lower total score)
 
 ### downstream_score
 - **Type**: Integer (0-100) or null
@@ -71,8 +71,7 @@ Detailed explanation of all response fields and their meanings.
 ## Score Breakdown
 
 ### breakdown.hygiene
-- **Type**: Integer (0-100)
-- **Weight**: 40% of total score
+- **Type**: Integer (0-100), reported as `100 + net hygiene penalty` (clamped)
 - **Description**: Routing best practices and protocol compliance
 - **Penalties Applied For**:
   - RPKI invalid routes (`RPKI_INVALID`): -20 (threshold: > 1%)
@@ -83,8 +82,7 @@ Detailed explanation of all response fields and their meanings.
   - Zombie ASN — registered but zero active routes: -15
 
 ### breakdown.threat
-- **Type**: Integer (0-100)
-- **Weight**: 35% of total score
+- **Type**: Integer (0-100), reported as `100 + net threat penalty` (clamped)
 - **Description**: Association with malicious infrastructure
 - **Penalties Applied For**:
   - Spamhaus listing (`THREAT_SPAMHAUS`): -30
@@ -96,9 +94,8 @@ Detailed explanation of all response fields and their meanings.
   - High WHOIS entropy (obfuscated name): -10 (threshold: entropy > 4.5)
 
 ### breakdown.stability
-- **Type**: Integer (0-100)
-- **Weight**: 25% of total score
-- **Description**: Operational reliability and BGP behavior
+- **Type**: Integer (0-100), reported as `100 + net stability penalty` (clamped)
+- **Description**: Operational reliability and BGP behavior (includes topology/forensic penalties)
 - **Bonuses Applied For**:
   - PeeringDB profile present: +5
   - Direct Tier-1 upstream count > 1: +5
@@ -272,23 +269,23 @@ The `details` field is no longer a list of strings but a list of **Actionable Ob
 
 ### Complete Penalty Code Reference
 
-Every entry in `details[]` carries a `code` that is stable across API versions and safe to match programmatically.
+Every entry in `details[]` carries a `code` that is stable across API versions and safe to match programmatically. Some codes are **advisory** — they appear in `details[]` to explain a condition but do **not** change the score (the `META_*` and `RPKI_UNKNOWN` codes). The scorer instead awards a `+5` stability bonus when a PeeringDB profile is present and another `+5` when there is more than one Tier-1 upstream.
 
-| Code | Sub-score | Penalty | Trigger Condition |
-|------|-----------|---------|-------------------|
-| `RPKI_INVALID` | Hygiene | -20 | Any prefix with RPKI status INVALID |
-| `RPKI_UNKNOWN` | Hygiene | -10 | > 50% of prefixes lack ROA coverage |
+| Code | Sub-score | Score impact | Trigger Condition |
+|------|-----------|--------------|-------------------|
+| `RPKI_INVALID` | Hygiene | -20 | > 1% of routes have RPKI status INVALID |
+| `RPKI_UNKNOWN` | — | 0 (advisory) | > 50% of routes lack ROA coverage |
 | `ROUTE_LEAK` | Hygiene | -20 | Valley-free routing violations detected |
 | `BOGON_AD` | Hygiene | -10 | RFC 1918 / reserved space announced |
-| `STUB_TRANSIT` | Hygiene | -15 | Stub ASN appears in transit paths |
-| `META_NO_PDB` | Hygiene | -5 | No PeeringDB profile found |
-| `META_NO_TIER1` | Hygiene | -5 | Zero direct Tier-1 upstream providers |
-| `META_PRIVATE` | Hygiene | -5 | WHOIS contact data hidden/private |
+| `STUB_TRANSIT` | Hygiene | -10 | Stub ASN acting as a transit hop |
+| `META_NO_PDB` | — | 0 (advisory) | No PeeringDB profile found |
+| `META_NO_TIER1` | — | 0 (advisory) | Zero direct Tier-1 upstream providers |
+| `META_PRIVATE` | — | 0 (advisory) | WHOIS contact data hidden/private |
 | `THREAT_SPAMHAUS` | Threat | -30 | Listed on Spamhaus DROP or EDROP |
 | `THREAT_SPAM` | Threat | -15 | Spam emission rate > 0.1 |
 | `THREAT_BOTNET` | Threat | -20/host (max -40) | One or more botnet C2 servers hosted |
-| `THREAT_PHISHING` | Threat | -5/domain | Active phishing domains detected |
-| `THREAT_MALWARE` | Threat | -10/sample | Malware distribution endpoints detected |
+| `THREAT_PHISHING` | Threat | -5/domain (max -20) | Active phishing domains detected |
+| `THREAT_MALWARE` | Threat | -10/sample (max -30) | Malware distribution endpoints detected |
 
 ## Null vs Zero Values
 

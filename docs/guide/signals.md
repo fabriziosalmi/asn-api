@@ -127,6 +127,7 @@ Boolean indicating the ASN is registered in WHOIS but announces 0 prefixes.
 - **Type**: Boolean
 - **Source**: WHOIS + BGP Cross-reference
 - **Update Frequency**: Daily
+- **Note**: Stored in `asn_signals` and used by the scorer, but **not** returned in the API `signals` object.
 
 ### whois_entropy
 
@@ -135,6 +136,7 @@ Shannon entropy score of the Organization Name. High values indicate algorithmic
 - **Type**: Float
 - **Source**: WHOIS
 - **Update Frequency**: Weekly
+- **Note**: Stored in `asn_signals` and used by the scorer, but **not** returned in the API `signals` object.
 
 ### downstream_score
 
@@ -143,6 +145,7 @@ Average risk score of this ASN's top downstream customers. "Guilt by association
 - **Type**: Integer (0-100)
 - **Source**: Graph Analysis
 - **Update Frequency**: Daily
+- **Note**: Returned as a **top-level** field of the score response, not inside `signals`.
 
 ## Forensics Signals
 

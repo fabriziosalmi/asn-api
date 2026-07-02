@@ -4,9 +4,9 @@ Practical integration patterns for common security tools and workflows.
 
 ## Firewall EDL Feed
 
-The `/feeds/edl` endpoint exports a plain-text list of high-risk ASNs in the `ASXXXXX` format. It requires **no authentication** and is designed to be polled directly by firewalls.
+The `/feeds/edl` endpoint exports a plain-text list of high-risk ASNs in the `ASXXXXX` format, designed to be polled by firewalls. It **requires the `X-API-Key` header** (configure your firewall's EDL source to send it).
 
-By default it returns every ASN with `risk_score ≤ 50` (CRITICAL + HIGH risk). Adjust the `max_score` parameter to tune aggressiveness.
+By default it returns every ASN with `risk_score ≤ 50` (all CRITICAL, plus the boundary of the HIGH band). Adjust the `max_score` parameter to tune aggressiveness. Risk bands: CRITICAL `<50`, HIGH `50-69`, MEDIUM `70-89`, LOW `≥90`.
 
 ### Palo Alto Networks (PAN-OS)
 
@@ -14,8 +14,9 @@ By default it returns every ASN with `risk_score ≤ 50` (CRITICAL + HIGH risk).
 2. Set **Type** to `IP List`
 3. Set **Source** to your EDL URL:  
    `http://your-asn-api-host/api/feeds/edl?max_score=50`
-4. Set **Check for updates** to `Every 5 minutes`
-5. In your Security Policy, reference the EDL in a **Block** rule for traffic sourcing from or destined to blocked ASNs
+4. Under the EDL's authentication settings, add the `X-API-Key` header with your API key (PAN-OS supports custom request headers on EDL sources)
+5. Set **Check for updates** to `Every 5 minutes`
+6. In your Security Policy, reference the EDL in a **Block** rule for traffic sourcing from or destined to blocked ASNs
 
 > Note: PAN-OS External Dynamic Lists require plain-line format. The EDL output (`AS174`, `AS3257`, …) satisfies this requirement when used with a BGP community-based AS path filter.
 
@@ -24,15 +25,16 @@ By default it returns every ASN with `risk_score ≤ 50` (CRITICAL + HIGH risk).
 1. Navigate to **Security Profiles → Threat Feeds → Add**
 2. Set **Type** to `IP Address`
 3. Set **URI** to `http://your-asn-api-host/api/feeds/edl`
-4. Optional: append `?max_score=49` for CRITICAL-only
-5. Apply the feed to a Firewall Policy using an **External Block List** object
+4. Add an `X-API-Key` HTTP header with your API key to the connector settings
+5. Optional: append `?max_score=49` for CRITICAL-only
+6. Apply the feed to a Firewall Policy using an **External Block List** object
 
 ### Generic / cURL polling
 
 ```bash
 #!/bin/bash
 # Pull the EDL and update a local blocklist file
-curl -sf "http://your-asn-api-host/api/feeds/edl?max_score=50" \
+curl -sf -H "X-API-Key: $API_KEY" "http://your-asn-api-host/api/feeds/edl?max_score=50" \
   > /etc/firewall/asn-blocklist.txt
 
 # Reload your firewall rules (example for ipset)
@@ -50,9 +52,9 @@ done < /etc/firewall/asn-blocklist.txt
 
 | `max_score` | Risk levels included | Typical use |
 |-------------|---------------------|-------------|
-| 49 | CRITICAL only | Strict — known malicious networks |
-| 74 | CRITICAL + HIGH | Balanced — recommended default |
-| 89 | + MEDIUM | Aggressive — may block legitimate traffic |
+| 49 | CRITICAL only (`<50`) | Strict — known malicious networks |
+| 69 | CRITICAL + HIGH (`≤69`) | Balanced — recommended default |
+| 89 | + MEDIUM (`≤89`) | Aggressive — may block legitimate traffic |
 
 A cron job refreshing the EDL list every 5 minutes provides near-real-time blocking with minimal latency.
 
@@ -64,8 +66,10 @@ The WebSocket endpoint at `WS /v1/stream` delivers score change events in real t
 
 ### Connection
 
+Authenticate with the `X-API-Key` handshake header (preferred — keeps the key out of URLs and proxy logs). A `?api_key=YOUR_KEY` query parameter is accepted as a fallback for clients that cannot set handshake headers.
+
 ```
-ws://your-asn-api-host/api/v1/stream?api_key=YOUR_KEY
+ws://your-asn-api-host/api/v1/stream       (header: X-API-Key: YOUR_KEY)
 ```
 
 ### Message examples
@@ -95,7 +99,8 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 API_KEY = "your-api-key"
-WS_URL = f"ws://your-asn-api-host/api/v1/stream?api_key={API_KEY}"
+WS_URL = "ws://your-asn-api-host/api/v1/stream"
+WS_HEADERS = {"X-API-Key": API_KEY}
 
 async def handle_update(msg: dict):
     if msg.get("type") == "ping":
@@ -110,7 +115,7 @@ async def handle_update(msg: dict):
 async def stream(backoff: float = 1.0):
     while True:
         try:
-            async with websockets.connect(WS_URL, ping_interval=None) as ws:
+            async with websockets.connect(WS_URL, additional_headers=WS_HEADERS, ping_interval=None) as ws:
                 print("Connected to score stream")
                 backoff = 1.0  # reset on success
                 async for raw in ws:
@@ -135,7 +140,8 @@ import websockets
 
 SPLUNK_HEC_URL = "https://splunk.example.com:8088/services/collector"
 SPLUNK_TOKEN = "your-hec-token"
-ASN_API_WS = "ws://your-asn-api-host/api/v1/stream?api_key=your-key"
+ASN_API_WS = "ws://your-asn-api-host/api/v1/stream"
+ASN_API_WS_HEADERS = {"X-API-Key": "your-key"}
 
 async def forward_to_splunk(session: aiohttp.ClientSession, msg: dict):
     payload = {"event": msg, "sourcetype": "asn:score_update"}
@@ -148,7 +154,7 @@ async def forward_to_splunk(session: aiohttp.ClientSession, msg: dict):
 
 async def main():
     async with aiohttp.ClientSession() as session:
-        async with websockets.connect(ASN_API_WS) as ws:
+        async with websockets.connect(ASN_API_WS, additional_headers=ASN_API_WS_HEADERS) as ws:
             async for raw in ws:
                 msg = json.loads(raw)
                 if msg.get("type") != "ping":
@@ -255,24 +261,16 @@ def should_prefer(asn_a: int, asn_b: int, api_key: str, base_url: str) -> int | 
 
 ## Prometheus Metrics
 
-The API exposes Prometheus-format metrics at `/metrics` (no authentication required). Scrape this endpoint to monitor API health in Grafana.
+The API container exposes Prometheus-format metrics on its own port (`asn-api:8000/metrics`). **The public edge blocks `/api/metrics` (nginx returns 403)** — scrape the API container directly on the internal network, not through the `:80/api` gateway.
 
 ```yaml
-# prometheus.yml scrape config
+# prometheus.yml scrape config (run Prometheus on the internal Docker network)
 scrape_configs:
   - job_name: asn-api
     static_configs:
-      - targets: ['your-asn-api-host:80']
-    metrics_path: /api/metrics
+      - targets: ['asn-api:8000']
+    metrics_path: /metrics
     scrape_interval: 15s
 ```
 
-Key metrics exported:
-
-| Metric | Type | Description |
-|--------|------|-------------|
-| `asn_api_requests_total` | Counter | Total HTTP requests by method/path/status |
-| `asn_api_request_duration_seconds` | Histogram | Request latency distribution |
-| `asn_api_cache_hits_total` | Counter | L1/L2 cache hit counts |
-| `asn_api_active_websocket_connections` | Gauge | Live WebSocket client count |
-| `asn_api_rate_limit_hits_total` | Counter | Rate-limited requests |
+Metrics are provided by [`prometheus-fastapi-instrumentator`](https://github.com/trallnag/prometheus-fastapi-instrumentator) with its default instrumentation — HTTP request counts and latency histograms labelled by method, path, and status (e.g. `http_requests_total`, `http_request_duration_seconds`), plus the standard Python/process collectors. No custom application metrics are defined.

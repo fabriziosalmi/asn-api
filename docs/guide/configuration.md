@@ -38,7 +38,7 @@ cp .env.example .env
 |----------|---------|-------------|
 | `CACHE_TTL` | 60 | API cache duration in seconds (0-3600) |
 | `API_RATE_LIMIT` | 100 | Requests per minute per IP (1-10000) |
-| `CORS_ORIGINS` | * | Comma-separated allowed origins |
+| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed origins (`*` disables credentialed requests) |
 
 ### Logging Settings
 

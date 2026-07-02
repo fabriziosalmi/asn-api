@@ -105,7 +105,7 @@ Triggered by Celery beat scheduler or on-demand:
 ### Score Query
 
 ```
-Client Request: GET /asn/15169
+Client Request: GET /v1/asn/15169
        │
        ▼
 ┌──────────────┐
@@ -135,7 +135,7 @@ Client Request: GET /asn/15169
 ### History Query
 
 ```
-Client Request: GET /asn/15169/history
+Client Request: GET /v1/asn/15169/history
        │
        ▼
 ┌──────────────┐
@@ -154,7 +154,8 @@ Client Request: GET /asn/15169/history
 
 | Table | Retention | Purpose |
 |-------|-----------|---------|
-| bgp_events | 30 days | Raw event analysis |
-| threat_events | 90 days | Threat investigation |
-| asn_score_history | 365 days | Trend analysis |
-| bgp_daily_mv | Indefinite | Historical metrics |
+| bgp_events | 90 days | Raw event analysis |
+| threat_events | 180 days | Threat investigation |
+| api_requests | 30 days | Request/audit logging |
+| asn_score_history | Indefinite (no TTL) | Trend analysis |
+| daily_metrics | Indefinite | Aggregated historical metrics |

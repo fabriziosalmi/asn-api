@@ -9,15 +9,15 @@
 
 ## Overview
 
-The ASN Risk Intelligence Platform is a production-grade system for assessing the security and stability risk of Autonomous Systems (ASNs) on the Internet. By combining real-time BGP routing data, threat intelligence feeds, and sophisticated network topology analysis, it generates comprehensive risk scores (0-100) that help organizations make informed decisions about network trust.
+The ASN Risk Intelligence Platform assesses the security and stability risk of Autonomous Systems (ASNs) on the Internet. By combining real-time BGP routing data, threat intelligence feeds, and network topology analysis, it generates risk scores (0-100) that help organizations make informed decisions about network trust.
 
 **Key Capabilities:**
-- **Real-time BGP Analysis** - Process hundreds of BGP updates per second from RIPE RIS live streams
-- **Multi-source Threat Intelligence** - Integrate Spamhaus, URLhaus, and other feeds
-- **Advanced Scoring Engine** - 30+ signals across hygiene, threats, stability, and forensics
-- **Historical Tracking** - 365-day score history with trend analysis and pagination
+- **Real-time BGP Analysis** - Ingest live BGP updates from RIPE RIS streams
+- **Multi-source Threat Intelligence** - Correlate Spamhaus, CINS, and URLhaus feeds
+- **Scoring Engine** - 16 signal fields across four categories, evaluated by 22 scoring rules
+- **Historical Tracking** - Score history with trend analysis and pagination (query window up to 365 days)
 - **Topology Analysis** - Upstream/downstream risk assessment and peer pressure analysis
-- **Production-Ready** - Async API with caching, rate limiting, structured logging, and monitoring
+- **Operational Tooling** - Async API with two-tier caching, per-IP rate limiting, structured logging, and monitoring
 
 ## Quick Start
 
@@ -95,8 +95,8 @@ All API endpoints require an API key passed via the `X-API-Key` header.
 | `GET` | `/v1/tools/domain-risk?domain=X` | Resolve domain → ASN → risk score |
 | `POST` | `/v1/tools/bulk-risk-check` | Bulk analysis (max 1000 ASNs) |
 | `POST` | `/v1/whitelist` | Add ASN to whitelist |
-| `GET` | `/feeds/edl` | Firewall EDL feed (plain text, no auth) |
-| `WebSocket` | `/v1/stream?api_key=X` | Real-time score update firehose |
+| `GET` | `/feeds/edl` | Firewall EDL feed (plain text, requires `X-API-Key`) |
+| `WebSocket` | `/v1/stream` | Real-time score update firehose (auth via `X-API-Key` header, or `?api_key=` fallback) |
 | `GET` | `/health` | Health check (no auth) |
 | `GET` | `/api/docs` | Swagger UI |
 | `GET` | `/api/redoc` | ReDoc |
@@ -125,12 +125,12 @@ curl -H "X-API-Key: $API_KEY" "http://localhost/api/v1/tools/domain-risk?domain=
 # PeeringDB metadata for an ASN
 curl -H "X-API-Key: $API_KEY" http://localhost/api/v1/asn/15169/peeringdb
 
-# Firewall EDL feed (no auth required, plain-text ASN list)
-curl http://localhost/api/feeds/edl
-curl "http://localhost/api/feeds/edl?max_score=49"  # CRITICAL only
+# Firewall EDL feed (requires X-API-Key, plain-text ASN list)
+curl -H "X-API-Key: $API_KEY" http://localhost/api/feeds/edl
+curl -H "X-API-Key: $API_KEY" "http://localhost/api/feeds/edl?max_score=49"  # CRITICAL only
 
-# Real-time score stream (WebSocket)
-wscat -c "ws://localhost/api/v1/stream?api_key=$API_KEY"
+# Real-time score stream (WebSocket) — key sent as a handshake header
+wscat -H "X-API-Key: $API_KEY" -c "ws://localhost/api/v1/stream"
 ```
 
 ### Response Headers
@@ -167,45 +167,37 @@ All errors use a structured envelope:
 
 ## Scoring Methodology
 
-The platform uses a multi-factor scoring model analyzing 30+ signals across four categories. Final score ranges from 0 (critical risk) to 100 (trusted).
-
-### Scoring Categories
-
-| Category | Weight | Description |
-|----------|--------|-------------|
-| **Routing Hygiene** | 40% | BGP routing health and RPKI compliance |
-| **Threat Intelligence** | 35% | Malicious activity and threat feed correlations |
-| **Network Stability** | 25% | BGP churn, predictive stability, upstream quality |
-| **Forensic Signals** | Bonus/Penalty | Advanced BGP analysis and topology risk |
+Every ASN starts at 100. The engine applies 22 additive rules (20 penalties, 2 bonuses) and clamps the result to 0-100 — there is no weighted average across categories. Each rule is attributed to a `hygiene`, `threat`, or `stability` sub-score (`breakdown`), and each sub-score is `100 + its net penalty`, clamped to 0-100.
 
 ### Signal Breakdown
 
-**Routing Hygiene (40%)**
-- RPKI Invalid ROA status (-20 points)
+**Routing Hygiene**
+- RPKI Invalid ROA status >1% of routes (-20 points)
 - Valley-free violation / route leaks (-20 points)
 - Bogon/reserved prefix advertisements (-10 points)
-- Prefix de-aggregation / fragmentation (-10 points)
+- Prefix de-aggregation / fragmentation >50 (-10 points)
+- Stub ASN acting as transit (-10 points)
 - Zombie ASN: active registration, zero routes (-15 points)
 
-**Threat Intelligence (35%)**
+**Threat Intelligence**
 - Spamhaus DROP/EDROP listing (-30 points)
 - High spam emission rate (-15 points)
 - Botnet C2 hosting (-20 per C2, cap -40)
+- Phishing hosting (-5 each, cap -20)
+- Malware distribution (-10 each, cap -30)
 - Threat recidivism over 30 days (-10 points)
 - WHOIS entropy (generated names) (-10 points)
 
-**Network Stability (25%)**
+**Network Stability** (includes topology/forensic penalties)
 - Upstream churn >2 providers/90d (-25 points)
-- Route flapping >100 withdrawals/week (-5 points)
 - Predictive instability (statistical analysis) (-15 points)
-- PeeringDB profile present (+5 bonus)
-- Multiple Tier-1 upstreams (+5 bonus)
+- Route flapping >100 withdrawals/week (-5 points)
 - Bad neighborhood (low-scoring upstreams) (-5 to -15 points)
-
-**Forensic Signals (Bonus/Penalty)**
-- Toxic downstream clientele (-20 points if avg <70)
+- Toxic downstream clientele, avg <70 (-20 points)
 - DDoS sponge / blackhole community tagging (-15 points)
 - Traffic engineering chaos / excessive prepending (-10 points)
+- PeeringDB profile present (+5 bonus)
+- Multiple Tier-1 upstreams (+5 bonus)
 
 ### Risk Levels
 
@@ -238,7 +230,7 @@ cp .env.example .env
 |----------|---------|-------------|
 | `CACHE_TTL` | 60 | API cache duration (seconds) |
 | `API_RATE_LIMIT` | 100 | Requests per minute per IP |
-| `CORS_ORIGINS` | * | Comma-separated allowed origins |
+| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed origins (`*` disables credentialed requests) |
 | `LOG_FORMAT` | json | Log format: `json` or `text` |
 | `LOG_LEVEL` | INFO | Log level |
 | `DB_POOL_SIZE` | 20 | PostgreSQL connection pool size |
@@ -356,8 +348,9 @@ black --check .
 **GitHub Actions** (`.github/workflows/ci.yml`):
 1. **Lint** - ruff + black
 2. **Test** - Python 3.11 + 3.12 matrix
-3. **Security** - pip-audit on all requirements
-4. **Load Test** - Locust syntax validation (main branch)
+3. **Build** - validate `docker compose config`, `nginx -t`, and build all images
+4. **Security** - pip-audit on all requirements
+5. **Load Test** - Locust syntax validation (main branch)
 
 **GitLab CI** (`.gitlab-ci.yml`):
 1. **Lint** - ruff + black
@@ -377,7 +370,7 @@ asn-api/
       migrations/           # Database migrations
       Dockerfile            # Multi-stage, non-root
     engine/
-      scorer.py             # Risk scoring algorithm (30+ signals)
+      scorer.py             # Risk scoring algorithm (22 rules)
       tasks.py              # Celery tasks with correlation IDs
       engine_settings.py    # Pydantic Settings
       Dockerfile
@@ -388,11 +381,11 @@ asn-api/
     db-metadata/init.sql    # PostgreSQL schema + indexes
     db-timeseries/init.sql  # ClickHouse schema + TTL policies
   tests/
-    test_api.py             # 65 API tests
-    test_scorer.py          # 2 scorer tests (exercise real _apply_scoring_rules)
+    test_api.py             # 66 API test functions
+    test_scorer.py          # 15 scorer test functions (exercise real _apply_scoring_rules)
     load/locustfile.py      # Load tests
   docs/                     # VitePress documentation
-  docker-compose.yml        # 9-service orchestration
+  docker-compose.yml        # 8-service orchestration
   .env.example              # All configuration variables
   .pre-commit-config.yaml   # ruff, black, security hooks
   .github/workflows/ci.yml  # GitHub Actions (matrix)
@@ -440,11 +433,11 @@ The scoring engine automatically invalidates Redis cache entries after score upd
 
 ### CORS
 
-Configurable via `CORS_ORIGINS` environment variable. Default: `*` (all origins). Set to specific domains in production.
+Configurable via `CORS_ORIGINS` environment variable. Default: `http://localhost:3000`. A `*` value serves any origin but disables credentialed requests. Set to specific domains in production.
 
 ### Rate Limiting
 
-Atomic rate limiting via Redis Lua script. Configurable per-IP limit with RFC-compliant headers (`X-RateLimit-*`, `Retry-After`).
+Per-client-IP rate limiting via a Redis Lua sliding-window log, enforced in the API middleware (the real client IP is read from `X-Real-IP`/`X-Forwarded-For` set by nginx). RFC-compliant headers (`X-RateLimit-*`, `Retry-After`). `/health`, `/`, and `/metrics` are exempt, and the limiter **fails open** (serves the request) if Redis is unavailable, prioritising availability.
 
 ## Documentation
 
@@ -459,10 +452,10 @@ Atomic rate limiting via Redis Lua script. Configurable per-IP limit with RFC-co
 |---------|--------|
 | Guide → Quick Start | Docker launch, first requests |
 | Guide → Configuration | All environment variables |
-| Guide → Scoring Model | Weights, penalties, risk levels |
+| Guide → Scoring Model | Penalties, bonuses, risk levels |
 | Guide → Signals | Every signal field explained |
 | Guide → Integrations | Palo Alto EDL, FortiGate, WebSocket consumers, SIEM |
-| API → Endpoints | All 12 routes with request/response examples |
+| API → Endpoints | All v1 routes with request/response examples |
 | API → Field Reference | Every field with penalty code table |
 | API → Response Schema | TypeScript interfaces for all response types |
 | Architecture → Overview | Two-tier cache, event bus, rate limiting, tracing |
@@ -472,7 +465,8 @@ Atomic rate limiting via Redis Lua script. Configurable per-IP limit with RFC-co
 
 - [DEPLOYMENT.md](./DEPLOYMENT.md) - Production deployment checklist
 - [KUBERNETES.md](./KUBERNETES.md) - Kubernetes deployment guide
-- [RATELIMIT.md](./RATELIMIT.md) - Rate limiting strategy
+- [CONTRIBUTING.md](./CONTRIBUTING.md) - Local setup and dev workflow
+- [SECURITY.md](./SECURITY.md) - Security policy and hardening notes
 - [CHANGELOG.md](./CHANGELOG.md) - Version history
 
 ## License
@@ -491,6 +485,5 @@ This software is licensed under a custom non-commercial license. See the [LICENS
 
 ---
 
-**Last Updated**: March 2026
-**Version**: 7.4.0
-**Platform Status**: Production Ready
+**Last Updated**: July 2026
+**Version**: 7.5.0

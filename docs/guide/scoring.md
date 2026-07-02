@@ -1,14 +1,14 @@
 # Scoring Model
 
-The risk score is a weighted composite of three signal categories, resulting in a value from 0 (maximum risk) to 100 (fully trusted).
+The risk score is an additive model, resulting in a value from 0 (maximum risk) to 100 (fully trusted).
 
 ## Score Calculation
 
 ```
-Total Score = (Hygiene × 0.40) + (Threat × 0.35) + (Stability × 0.25)
+Total Score = clamp(0, 100, 100 − Σ penalties + Σ bonuses)
 ```
 
-Each component starts at 100 and receives penalties based on detected signals.
+There is no weighted average across categories. Every ASN starts at 100; each rule subtracts (or adds) points and is attributed to a `hygiene`, `threat`, or `stability` sub-score. Each sub-score is reported as `100 + its net penalty`, clamped to 0-100.
 
 ## Risk Levels
 
@@ -19,7 +19,7 @@ Each component starts at 100 and receives penalties based on detected signals.
 | 50-69 | HIGH | Significant risk factors |
 | 0-49 | CRITICAL | Known malicious or severely compromised |
 
-## Hygiene Score (40%)
+## Hygiene Sub-score
 
 Evaluates routing best practices and protocol compliance.
 
@@ -29,9 +29,10 @@ Evaluates routing best practices and protocol compliance.
 | Route Leaks | -20 | Valley-free routing violations |
 | Bogon Ads | -10 | Advertising reserved/unallocated space |
 | High Fragmentation | -10 | Excessive prefix fragmentation (score >50) |
+| Stub-but-transit | -10 | Small originator acting as a transit hop |
 | Zombie ASN | -15 | Registered but silent (0 prefixes) |
 
-## Threat Score (35%)
+## Threat Sub-score
 
 Measures association with malicious activity.
 
@@ -39,11 +40,13 @@ Measures association with malicious activity.
 |--------|---------|-------------|
 | Spamhaus Listed | -30 | Present on DROP/EDROP lists |
 | Botnet C2 | -20/host (max -40) | Hosting command and control servers |
+| Malware Distribution | -10/host (max -30) | Hosting malware distribution points |
+| Phishing Hosting | -5/host (max -20) | Hosting phishing domains |
 | High Spam Rate | -15 | Excessive spam emission |
 | WHOIS Entropy | -10 | Algorithmically generated Org Name |
 | Persistent Threats | -10 | Repeated threat activity (>5 events in 30d) |
 
-## Stability Score (25%)
+## Stability Sub-score
 
 Assesses operational reliability based on historical behavior.
 
@@ -62,7 +65,7 @@ Assesses operational reliability based on historical behavior.
 
 ## Score History
 
-All score changes are recorded in ClickHouse with millisecond precision. The `/asn/{asn}/history` endpoint provides access to historical data for trend analysis.
+Each score is recorded in ClickHouse (`asn_score_history`, `DateTime` / second precision). The `/v1/asn/{asn}/history` endpoint provides access to historical data for trend analysis.
 
 Historical data enables:
 
