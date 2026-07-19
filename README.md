@@ -2,7 +2,7 @@
 
 > **Real-time trust scoring for Internet Autonomous Systems using BGP telemetry, threat intelligence, and network topology analysis**
 
-[![License](https://img.shields.io/badge/license-Non--Commercial-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
 [![CI](https://github.com/fabriziosalmi/asn-api/actions/workflows/ci.yml/badge.svg)](https://github.com/fabriziosalmi/asn-api/actions)
@@ -471,9 +471,9 @@ Per-client-IP rate limiting via a Redis Lua sliding-window log, enforced in the 
 
 ## License
 
-**Non-Commercial Use License**
+**MIT License** - see the [LICENSE](LICENSE) file for details.
 
-This software is licensed under a custom non-commercial license. See the [LICENSE](LICENSE) file for complete terms and conditions. For commercial licensing inquiries, contact the repository owner through GitHub.
+The application code is released under the permissive MIT License. Note that the platform ingests third-party data feeds at runtime; anyone operating the service is responsible for honoring the terms of each upstream provider. See [DATA_SOURCES.md](DATA_SOURCES.md) for details.
 
 ## Acknowledgments
 
