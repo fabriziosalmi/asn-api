@@ -4,6 +4,9 @@ export default defineConfig({
   title: 'ASN Risk Platform',
   description: 'Autonomous System Risk Intelligence Documentation',
   base: '/asn-api/',
+  // The hostname carries the base path on purpose: VitePress joins it with each
+  // page's route, so without it every URL in the sitemap would point at a 404.
+  sitemap: { hostname: 'https://fabriziosalmi.github.io/asn-api/' },
   ignoreDeadLinks: true,
 
   head: [
