@@ -18,7 +18,10 @@ jobs:
         python-version: '3.11'
 
     - name: Install linters
-      run: pip install ruff black
+      # Pinned: an unpinned linter means a release elsewhere can turn CI red with no
+      # code change — which is exactly what happened when ruff 0.16 widened its
+      # default rule set. Bump these on purpose, in their own commit.
+      run: pip install ruff==0.16.6 black==26.5.1
 
     - name: Lint with ruff
       run: ruff check .

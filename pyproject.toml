@@ -11,9 +11,16 @@ extend-exclude = '''
 '''
 
 [tool.ruff]
-# Keep ruff's built-in default rule set (E4/E7/E9 + F). The value of this config
-# is centralizing line length + excluding venv/migrations/docs so that the CI's
-# `ruff check .` / `black --check .` scan exactly the source we own.
+# Line length + the exclusions, so that the CI's `ruff check .` / `black --check .`
+# scan exactly the source we own.
 line-length = 88
 target-version = "py311"
 extend-exclude = ["venv", ".venv", "migrations", "docs"]
+
+[tool.ruff.lint]
+# E4/E7/E9 + F: what this project has always meant to enforce. It used to be left
+# implicit as "ruff's default", but the default is not a contract — ruff 0.16 widened
+# it (BLE, UP, I, DTZ, PIE, S, ASYNC, TRY...) and 100 findings appeared in CI with no
+# code change. Stating the set makes the CI reproducible; widening it is a separate,
+# deliberate decision, not something a dependency release gets to make for us.
+select = ["E4", "E7", "E9", "F"]
