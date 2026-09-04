@@ -30,7 +30,7 @@ jobs:
       # Pinned to a commit rather than @v1: a moving tag means trusting the
       # upstream repository not to change under us.
       - name: Run slopless
-        uses: fabriziosalmi/slopless@7837fd959b607919593ed7ca6a23d2f8f9d4391f # v1.11.0
+        uses: fabriziosalmi/slopless@9351a762497cb51a57bc92f05d5c10c51c2deb0d # v1.12.4
         with:
           patterns: "services/**/*.py scripts/**/*.py sdk/**/*.py *.md docs/**/*.md"
           format: sarif
