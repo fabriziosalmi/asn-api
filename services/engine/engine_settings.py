@@ -8,8 +8,12 @@ class EngineSettings(BaseSettings):
     """Validated configuration for the ASN Scoring Engine."""
 
     # PostgreSQL
-    postgres_user: str = Field(..., description="PostgreSQL username")
-    postgres_password: str = Field(..., description="PostgreSQL password")
+    # min_length is what makes the README's "required credentials fail-fast"
+    # claim true: docker compose substitutes an unset variable with an EMPTY
+    # string, which satisfies a bare required str and defers the failure to the
+    # first query. A length floor turns that back into a startup error.
+    postgres_user: str = Field(..., min_length=1, description="PostgreSQL username")
+    postgres_password: str = Field(..., min_length=1, description="PostgreSQL password")
     postgres_db: str = Field(default="asn_registry", description="PostgreSQL database")
     db_meta_host: str = Field(default="db-metadata", description="PostgreSQL host")
 

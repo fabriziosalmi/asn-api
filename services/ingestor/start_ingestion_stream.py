@@ -33,11 +33,21 @@ REDIS_URL = os.getenv("BROKER_URL", "redis://broker-cache:6379/0")
 THREAT_INTEL_INTERVAL = 21600  # 6 hours
 ROUTE_LEAK_SCAN_INTERVAL = 300  # 5 minutes
 
+# --- ClickHouse deadlines ---
+# Without these the driver waits 300s by default, which stalls the shared event
+# loop (batch flushing runs on it too) behind one slow query.
+CH_CONNECT_TIMEOUT = 5
+CH_SEND_RECEIVE_TIMEOUT = 120
+
 
 class DataIngestor:
     def __init__(self) -> None:
         self.ch_client = Client(
-            host=CLICKHOUSE_HOST, user=CLICKHOUSE_USER, password=CLICKHOUSE_PASSWORD
+            host=CLICKHOUSE_HOST,
+            user=CLICKHOUSE_USER,
+            password=CLICKHOUSE_PASSWORD,
+            connect_timeout=CH_CONNECT_TIMEOUT,
+            send_receive_timeout=CH_SEND_RECEIVE_TIMEOUT,
         )
         # clickhouse-driver Client is NOT thread-safe; protect all execute() calls
         self._ch_lock = threading.Lock()

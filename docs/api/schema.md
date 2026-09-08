@@ -137,7 +137,11 @@ interface UpstreamPeer {
 
 ## Error Response
 
-All error responses follow a consistent structure with a stable `code` for programmatic handling.
+All JSON error responses follow a consistent structure with a stable `code` for programmatic handling.
+
+**Exception:** `GET /feeds/edl` serves `text/plain` and returns an **empty body** with the
+status code on failure, so that firewall EDL parsers are never handed JSON. Check the
+status code on that endpoint rather than parsing the body.
 
 ```typescript
 interface ErrorResponse {
