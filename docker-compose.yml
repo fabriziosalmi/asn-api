@@ -28,7 +28,8 @@ services:
           memory: 512M
 
   db-timeseries:
-    image: clickhouse/clickhouse-server:latest
+    # Pinned: a stateful store must not change major version on a `pull`.
+    image: clickhouse/clickhouse-server:26.6
     container_name: asn_db_history
     restart: always
     environment:
@@ -172,7 +173,7 @@ services:
           memory: 512M
 
   dashboard:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.0
     container_name: asn_viz
     volumes:
       - grafana_data:/var/lib/grafana

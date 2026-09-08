@@ -37,6 +37,15 @@ logger = logging.getLogger("engine.scorer")
 # --- DB Config ---
 PG_PASS_SAFE = urllib.parse.quote_plus(settings.postgres_password)
 
+# Deadlines. This is a batch worker, not a request path, so the budgets are
+# wider than the API's — but they must exist: without them a store that accepts
+# connections and then answers slowly stalls a Celery worker indefinitely, and
+# the task is not retried, so the rescore is simply lost.
+PG_CONNECT_TIMEOUT = 5  # seconds to establish a connection
+PG_STATEMENT_TIMEOUT_MS = 120_000  # server-side cap on a single statement
+CH_CONNECT_TIMEOUT = 5
+CH_SEND_RECEIVE_TIMEOUT = 120  # driver default is 300s
+
 ASN_MIN = 1
 ASN_MAX = 4294967295
 
@@ -48,11 +57,17 @@ class RiskScorer:
             pool_size=settings.db_pool_size,
             max_overflow=settings.db_max_overflow,
             pool_pre_ping=True,
+            connect_args={
+                "connect_timeout": PG_CONNECT_TIMEOUT,
+                "options": f"-c statement_timeout={PG_STATEMENT_TIMEOUT_MS}",
+            },
         )
         self.ch_client = Client(
             host=settings.db_ts_host,
             user=settings.clickhouse_user,
             password=settings.clickhouse_password,
+            connect_timeout=CH_CONNECT_TIMEOUT,
+            send_receive_timeout=CH_SEND_RECEIVE_TIMEOUT,
         )
         self.redis_client = redis.Redis.from_url(
             settings.broker_url, decode_responses=True

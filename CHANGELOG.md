@@ -2,6 +2,40 @@
 
 All notable changes to the ASN Risk Intelligence Platform.
 
+## [Unreleased] - Audit remediation, first pass (Sep 2026)
+### Fixed
+- **Internal control plane no longer reachable from the edge**: nginx blocked
+  only `/api/metrics`, so `DELETE /api/v1/internal/cache/{asn}` was proxied to
+  the public internet. Added a matching `^~ /api/v1/internal/` deny, which also
+  makes the claim in `docs/architecture/index.md` true.
+- **Database deadlines**: neither Postgres nor ClickHouse had any timeout, so a
+  store that accepted connections and answered slowly pinned request handlers
+  (and ClickHouse pool threads, for up to the driver's 300s default) until nginx
+  cut the connection at 60s. All three services now set connect and
+  statement/receive timeouts, sized under the proxy's budget on the API.
+- **Credential fail-fast now matches the README**: `POSTGRES_USER` and
+  `POSTGRES_PASSWORD` were required but unconstrained, and docker compose turns
+  an unset variable into an empty string, which satisfies a bare `str`. Both now
+  carry `min_length=1`, so a missing credential fails at startup naming the
+  field instead of at the first query.
+- **`CORS_ORIGINS` in `.env.example`** was `*`, contradicting the README's own
+  production advice two sections away, and `.env.example` is what the quickstart
+  and CI copy. Now defaults to the documented `http://localhost:3000`.
+
+### Changed
+- **Pinned the two stateful images** (`clickhouse-server:26.6`, `grafana:13.0`)
+  that were on `latest`, since the documented monthly maintenance step is
+  `docker-compose pull && docker-compose up -d` — which could move a database
+  across major versions on a live volume.
+
+### Documentation
+- `docs/api/schema.md`: the error-envelope contract now records that
+  `GET /feeds/edl` is the exception and returns an empty `text/plain` body.
+- `docs/guide/configuration.md`: replaced the `alembic revision --autogenerate`
+  instruction, which silently emits an empty migration because
+  `migrations/env.py` sets `target_metadata = None`, with the hand-written form
+  plus a note explaining why.
+
 ## [7.5.1] - Complete the Signals & Dynamic Upstreams (Jul 2026)
 ### Added
 - **Three remaining signals now populated** from real data (no fabrication):

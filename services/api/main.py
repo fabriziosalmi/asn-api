@@ -70,11 +70,25 @@ logger = logging.getLogger("asn_api")
 # --- Database Connections ---
 PG_PASS_SAFE = urllib.parse.quote_plus(settings.postgres_password)
 
+# Deadlines. nginx gives an upstream request 60s (proxy_read_timeout), so both
+# stores must give up BEFORE that: the API should return its own error envelope
+# rather than have the proxy cut the connection. Without these, a Postgres or
+# ClickHouse that accepts connections but answers slowly pins a handler (and,
+# for CH, one of the few pool threads) indefinitely.
+PG_CONNECT_TIMEOUT = 5  # seconds to establish a connection
+PG_COMMAND_TIMEOUT = 30  # seconds for a single statement
+CH_CONNECT_TIMEOUT = 5
+CH_SEND_RECEIVE_TIMEOUT = 30  # driver default is 300s — far past nginx's 60s
+
 pg_engine = create_async_engine(
     f"postgresql+asyncpg://{settings.postgres_user}:{PG_PASS_SAFE}@{settings.db_meta_host}/{settings.postgres_db}",
     pool_size=settings.db_pool_size,
     max_overflow=settings.db_max_overflow,
     pool_pre_ping=True,
+    connect_args={
+        "timeout": PG_CONNECT_TIMEOUT,
+        "command_timeout": PG_COMMAND_TIMEOUT,
+    },
 )
 
 
@@ -83,6 +97,8 @@ def _new_ch_client() -> Client:
         host=settings.db_ts_host,
         user=settings.clickhouse_user,
         password=settings.clickhouse_password,
+        connect_timeout=CH_CONNECT_TIMEOUT,
+        send_receive_timeout=CH_SEND_RECEIVE_TIMEOUT,
     )
 
 

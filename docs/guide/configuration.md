@@ -99,9 +99,13 @@ alembic stamp 001_baseline
 # For new databases
 alembic upgrade head
 
-# Create a new migration
-alembic revision --autogenerate -m "description"
+# Create a new migration (hand-written: see note below)
+alembic revision -m "description"
 ```
+
+Migrations are **written by hand**. `migrations/env.py` sets `target_metadata = None`
+because the project has no declarative SQLAlchemy models, so `--autogenerate` would
+emit an empty migration rather than detecting your change.
 
 ## Resource Allocation
 
